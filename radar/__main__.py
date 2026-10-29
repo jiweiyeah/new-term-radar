@@ -49,7 +49,7 @@ from datetime import date
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import asks, breakout, config, feeds, gsc, money, new_sites, notify, pains, report, review, revenue, seller_history, sellers, \
+from . import aisa, asks, breakout, config, feeds, gsc, money, new_sites, notify, pains, report, review, revenue, seller_history, sellers, \
     sidelights, sitemaps, sources, store, usecases
 from .i18n import t
 
@@ -173,6 +173,7 @@ def paying_names(blocks: dict) -> list[str]:
 
 def keyword_table(cfg: dict, state: Path, names: list[str], repos: dict[str, str]) -> tuple[dict, str]:
     """The keyword table for names someone asked about: (the data, the table in Markdown)."""
+    aisa.set_key_ledger(state / "aisa_keys.json")   # the MCP server calls this without going through main()
     uc = usecases.run(cfg, state, [n.lower().strip() for n in names if n.strip()], {k.lower(): v for k, v in repos.items()}, on_request=True)
     return uc, "\n".join(report.keyword_table(cfg, uc)).strip() + "\n"
 
@@ -288,6 +289,7 @@ def main(argv: list[str] | None = None) -> int:
     if "judge" in args.skip:
         cfg["judge"]["model"] = ""
     state.mkdir(parents=True, exist_ok=True)
+    aisa.set_key_ledger(state / "aisa_keys.json")
     if args.command == "keywords":
         return cmd_keywords(args, cfg, state)
     if args.command == "pains":

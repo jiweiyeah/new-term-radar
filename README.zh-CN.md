@@ -233,7 +233,7 @@ python -m radar history --out sellers.csv
 git clone https://github.com/zhuyansen/new-term-radar
 cd new-term-radar
 cp config.example.json config.json      # 然后编辑：你的 X 账号、sitemap、主题；想要中文报告把 lang 改成 "zh"
-export AISA_API_KEY=...                 # 从 https://go.aisa.one/yansen-zhu 获取；用 AIsa 命令行 `aisa login` 登录过也可以
+export AISA_API_KEY=...                 # 从 https://go.aisa.one/yansen-zhu 获取；用 AIsa 命令行 `aisa login` 登录过也可以。多个 key 用逗号隔开，按顺序用：一个 key 被拒（401/402/403）就标记跳过、换下一个，标记记在 state/aisa_keys.json（只存指纹），data 和 chat 两个钱包分开记
 python -m radar daily --out report.md
 ```
 
