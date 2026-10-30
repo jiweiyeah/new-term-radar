@@ -2,13 +2,15 @@ import copy
 
 import pytest
 
-from radar import aisa, config, dotcom, goanyapi, i18n, page_age
+from radar import aisa, config, dotcom, goanyapi, i18n, notify, page_age
 
 
 @pytest.fixture(autouse=True)
 def english(monkeypatch):
     i18n.set_lang("en")
     monkeypatch.delenv("GOANYAPI_API_KEY", raising=False)   # the optional source is off unless a test turns it on
+    for key in notify.ENV_KEYS:   # configured notifications must never send a real report from a test
+        monkeypatch.delenv(key, raising=False)
 
     def no_network(*a, **k):
         raise goanyapi.GoAnyError("no network in tests")

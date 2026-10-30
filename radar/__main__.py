@@ -1,7 +1,7 @@
 """new-term-radar: terms that are starting to surge, earliest signal first.
 
-  python -m radar daily    [--config config.json] [--state state] [--out report.md] [--skip x,hf,...] [--new-sites] [--mail]
-  python -m radar sources  [--config config.json] [--state state] [--out sources.md] [--mail]
+  python -m radar daily    [--config config.json] [--state state] [--out report.md] [--skip x,hf,...] [--new-sites] [--mail] [--feishu]
+  python -m radar sources  [--config config.json] [--state state] [--out sources.md] [--mail] [--feishu]
 
 Signals:
   ① x         names the accounts you follow said for the first time (AIsa)
@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from datetime import date
@@ -73,10 +74,19 @@ def run(fn, skip: bool = False) -> dict:
 
 def _finish(args, text: str, subject: str) -> None:
     if args.out:
-        Path(args.out).write_text(text)
+        Path(args.out).write_text(text, encoding="utf-8")
     print(text)
+    channels = []
     if args.mail:
-        print(notify.send(subject, text))
+        channels.append(notify.send)
+    if getattr(args, "feishu", False) or os.environ.get("FEISHU_WEBHOOK", "").strip():
+        channels.append(notify.send_feishu)
+    for send in channels:
+        try:
+            print(send(subject, text))
+        except (Exception, SystemExit) as exc:  # a notification must not lose a report or block another channel
+            channel = "feishu" if send is notify.send_feishu else "mail"
+            print(f"{channel} failed: {type(exc).__name__}; report kept locally", file=sys.stderr)
 
 
 def cmd_sources(args, cfg: dict, state: Path) -> int:
@@ -271,6 +281,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--feeds", action="store_true", help="run the weekly feeds (Google's new pages, rising root words) today")
     p.add_argument("--extension", action="append", default=[], metavar="ID", help="for `pains`: a Chrome extension to read the reviews of")
     p.add_argument("--mail", action="store_true", help="mail the report (see radar/notify.py)")
+    p.add_argument("--feishu", action="store_true", help="send the report to Feishu (also automatic when FEISHU_WEBHOOK is set)")
     p.add_argument("--platform", action="append", choices=sorted(sellers.PLATFORMS), help="for `history pull` and `update`: one platform (default: all)")
     p.add_argument("--max-usd", type=float, help="for `history pull` (default 20), `update` (default 3) and `sort` (default 30): stop at this spend")
     p.add_argument("--workers", type=int, default=32, help="for `history read`: home pages fetched at a time")
@@ -288,6 +299,8 @@ def main(argv: list[str] | None = None) -> int:
     cfg = config.load(Path(args.config) if args.config else None)
     if "judge" in args.skip:
         cfg["judge"]["model"] = ""
+    if args.command in {"daily", "sources"}:
+        notify.load_env(cfg["_dir"] / ".env")
     state.mkdir(parents=True, exist_ok=True)
     aisa.set_key_ledger(state / "aisa_keys.json")
     if args.command == "keywords":

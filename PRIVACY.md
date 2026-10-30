@@ -17,6 +17,7 @@ Through the providers whose keys you set. A request carries what the radar is lo
 - TrustMRR (`trustmrr.com`), with `TRUSTMRR_API_KEY`: verified revenue listings
 - Google Search Console (`googleapis.com`), with your own Google token: the queries your own site got
 - Resend (`api.resend.com`), with `RESEND_API_KEY`: only to email the report, to the addresses you put in `RADAR_EMAIL_TO`
+- Feishu (`open.feishu.cn`), with `FEISHU_WEBHOOK`: the report title and complete report, only to the group whose custom-bot webhook you configure
 
 Each key goes only to its own provider. What a provider keeps of a request is governed by that provider's own privacy policy. Without a key, the signals that need it are skipped and the report says so; a lookup that cannot run without one stops with a message naming the key.
 
@@ -29,6 +30,8 @@ In `RADAR_STATE` (by default `./state`; the skills keep theirs under `~/new-term
 - caches of keyword tables and site ratings, so a repeated lookup costs nothing
 
 Reports go where you write them (`--out`). Delete the folder to remove all of it. Keys are never written there; a Search Console token is the file you put next to `config.json`, or `GSC_TOKEN_JSON`.
+
+Notification settings may be stored in a local `.env` beside `config.json`, which is excluded from Git. The Feishu webhook acts as a credential and is not printed in notification logs.
 
 ## Contact
 

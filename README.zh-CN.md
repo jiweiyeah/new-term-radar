@@ -248,7 +248,7 @@ python -m radar daily --skip x,hf --out report.md  # 其余全部，每天一次
 
 `sources` 只在有新名字时才写报告。`daily` 带 `--skip x,hf` 时，会列出 `sources` 在过去 24 小时记下的线索。如果你每天只跑一次，直接用 `python -m radar daily`，什么都不跳过。
 
-其他参数：`--skip` 可选 `x,hf,breakout,sitemaps,newsites,gsc,review,judge,usecases`；`--new-sites` 让每周信号今天就跑；`--mail` 发邮件（见下）；`--state DIR` 指定数据库和快照的目录。
+其他参数：`--skip` 可选 `x,hf,breakout,sitemaps,newsites,gsc,review,judge,usecases`；`--new-sites` 让每周信号今天就跑；`--mail` 发邮件（见下）；`--feishu` 推送飞书（配置 webhook 后自动启用，见下）；`--state DIR` 指定数据库和快照的目录。
 
 ## 报告长什么样
 
@@ -309,6 +309,27 @@ python scripts/gsc_auth.py gsc_client.json   # 打开一次浏览器授权，写
 ### 邮件（可选）
 
 `--mail` 通过 [Resend](https://resend.com) 发送报告。设置 `RESEND_API_KEY`、`EMAIL_FROM`（你在 Resend 验证过的域名下的地址）和 `RADAR_EMAIL_TO`（多个用逗号分隔）。要 HTML 版需要 `pip install markdown`。
+
+任一设置未配置或为空时，邮件直接跳过，不影响生成报告或推送飞书。邮件发送失败也不会中断报告任务。
+
+### 飞书（可选）
+
+在 `config.json` 同目录创建 `.env`（可复制 `.env.example`），填写你自己的飞书群自定义机器人 webhook：
+
+```dotenv
+FEISHU_WEBHOOK=你的飞书机器人Webhook
+```
+
+配置后，`daily` 和 `sources` 生成的报告会自动推送到该群，无需 `--mail`，也不依赖邮件配置：
+
+```bash
+python -m radar daily --out report.md
+python -m radar sources --out sources.md
+```
+
+推送内容包括报告标题及完整 Markdown 正文（按纯文本发送）；长报告自动分段并标注序号。`sources` 没有新名字或错误时不发送。`--feishu` 可显式请求推送；未配置 webhook 时只提示跳过。推送失败不影响本地报告；部分发送失败时停止后续分段并记录失败序号，不自动重试，以免重复。
+
+`.env` 已被 Git 忽略，只读取通知相关的四个变量（飞书 webhook 和三个邮件设置），不会执行 shell 命令；已导出的环境变量优先，即使值为空。GitHub Actions 中请设置仓库 Secret `FEISHU_WEBHOOK`，不要把真实地址提交到代码仓库。若机器人设置了关键词或 IP 白名单，报告内容和运行环境必须符合这些限制；当前不支持机器人签名校验。
 
 ## 在 agent 里用：skill 和 MCP 服务器
 

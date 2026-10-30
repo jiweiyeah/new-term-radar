@@ -315,6 +315,21 @@ python scripts/gsc_auth.py gsc_client.json   # opens a browser once, writes gsc_
 
 `--mail` sends the report through [Resend](https://resend.com). Set `RESEND_API_KEY`, `EMAIL_FROM` (an address on a domain you verified there) and `RADAR_EMAIL_TO` (comma-separated). `pip install markdown` for the HTML version.
 
+Missing or blank settings skip email without affecting the report or Feishu. Delivery failures do not interrupt the report run.
+
+### Feishu (optional)
+
+Copy `.env.example` to `.env` beside `config.json` and set `FEISHU_WEBHOOK` to your Feishu group's custom-bot webhook. Configuring it opts `daily` and `sources` reports into automatic delivery, independently of `--mail` and email settings:
+
+```bash
+python -m radar daily --out report.md
+python -m radar sources --out sources.md
+```
+
+Messages contain the report title and complete Markdown as plain text. Long reports are split into numbered messages. A quiet `sources` run sends nothing. `--feishu` explicitly requests delivery; a missing webhook simply prints a skip notice. Failed delivery leaves the local report intact; a failed part stops later parts and logs its number, without automatic retries that might duplicate messages.
+
+`.env` is Git-ignored and reads only the four notification settings (the webhook and three email settings), without executing shell commands. Exported environment variables take precedence, even when empty. In GitHub Actions, set the repository secret `FEISHU_WEBHOOK`; never commit the actual webhook. If your bot has keyword or IP restrictions, the report and runtime must satisfy them. Bot signature verification is not currently supported.
+
 ## Use it from an agent: skills and an MCP server
 
 ### Skills
