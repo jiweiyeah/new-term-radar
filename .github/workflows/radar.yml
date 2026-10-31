@@ -24,7 +24,7 @@ name: New-term radar
 
 on:
   schedule:
-    - cron: "0 0,8,16 * * *"   # sources
+    - cron: "*/5 * * * *"     # TEMPORARY: a five-minute cron, to prove the schedule trigger in this repo
     - cron: "30 1 * * *"       # daily
   workflow_dispatch:
     inputs:
