@@ -1,4 +1,4 @@
-config.json
+# config.json is committed: the Action and the CLI read the same list
 state/
 gsc_token.json
 gsc_client.json
