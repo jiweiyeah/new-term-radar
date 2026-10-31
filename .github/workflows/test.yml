@@ -3,6 +3,7 @@ name: Tests
 on:
   push:
   pull_request:
+  workflow_dispatch:   # a hand-run of the suite, when a push is not wanted or not enough
 
 jobs:
   test:
