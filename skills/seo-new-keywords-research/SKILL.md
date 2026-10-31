@@ -11,11 +11,11 @@ A name ("SynthID Detector") has a short life as a keyword and belongs to someone
 
 ## Before you run anything
 
-1. Run the pinned release, never a clone of the repository: `uvx new-term-radar==0.6.1 <command> …` (uv fetches that version from PyPI into a throwaway environment; it needs Python 3.10 or newer and nothing else). Without uv: `python3 -m pip install new-term-radar==0.6.1`, then `new-term-radar <command> …`.
+1. Run the pinned release, never a clone of the repository: `uvx new-term-radar==0.7.0 <command> …` (uv fetches that version from PyPI into a throwaway environment; it needs Python 3.10 or newer and nothing else). Without uv: `python3 -m pip install new-term-radar==0.7.0`, then `new-term-radar <command> …`.
 2. Run every command from one working directory: `$NEW_TERM_RADAR_DIR` if set, else `~/new-term-radar` (create it if it is missing).
 3. Two keys are needed. `MONID_API_KEY` pays for every lookup here: the X posts, the search volumes, the Trends curves and the page-one check. A key comes from https://monid.ai/tools. Without it, stop and say so. `OPENAI_API_KEY` is the model gateway: the phrases the model proposes and the score it gives them go through it. `AISA_API_KEY` is optional: it answers the DataForSEO readings when Monid's answer does not come back. The model calls never go there.
 4. The ratings of the sites on page one come from Monid alone (there is no second door for them). With a Monid key the table holds them, so a term's competition is judged by the sites' own strength and not by keyword difficulty alone. Without one, say that the page-one verdict rests on the keyword difficulty alone.
-5. With no `config.json` in that directory the radar runs on the example list of X accounts and sitemaps it ships with, and says so. Tell the user, and that a `config.json` written there replaces it (the example to start from: https://github.com/zhuyansen/new-term-radar/blob/v0.6.0/config.example.json).
+5. With no `config.json` in that directory the radar runs on the example list of X accounts and sitemaps it ships with, and says so. Tell the user, and that a `config.json` written there replaces it (the example to start from: https://github.com/zhuyansen/new-term-radar/blob/v0.7.0/config.example.json).
 
 ## Step 1: pick the names
 
@@ -31,7 +31,7 @@ If the user gave names, use them. If they gave text (a listening report, posts, 
 About 0.70 USD a call for one or two names, 1.05 USD for five, and 40 to 90 seconds a name. State the estimate and run only after the user says yes: a request for keywords is not a yes to the cost. Ask again if the list of names changes. Then:
 
 ```bash
-uvx new-term-radar==0.6.1 keywords "photocraft" "synthid detector" --repo "photocraft=storytold/photocraft" --json
+uvx new-term-radar==0.7.0 keywords "photocraft" "synthid detector" --repo "photocraft=storytold/photocraft" --json
 ```
 
 Drop `--json` for the Markdown table alone. Run one call with all the names, not one call per name: the markets reading is paid once a call (0.43 USD), so the names share it.

@@ -1,16 +1,17 @@
 # Changelog
 
-## Unreleased
+## 0.7.0 (2026-10-31)
 
 ### The paid readings go through Monid
 
 The AIsa account's wallet ran empty on 2026-10-31: every data call and every chat call came
-back refused ("insufficient wallet balance"). The Monid workspace wallet was empty too ($0.000146
-left on 2026-10-31), so both doors refuse the paid readings until one of them is topped up; the
-radar names the refusal and goes on with what it can read for free. Monid resells the same
-DataForSEO data at DataForSEO's price and carries the same X, Reddit and YouTube tools, so the
-paid readings now go there first, and AIsa answers when Monid's answer does not come back. One key
-still runs everything; two keys make Monid the one that pays.
+back refused ("insufficient wallet balance"). Monid resells the same DataForSEO data at
+DataForSEO's price and carries the same X, Reddit and YouTube tools, so the paid readings now
+go there first, and AIsa answers when Monid's answer does not come back. One key still runs
+everything; two keys make Monid the one that pays. With both wallets empty the radar named the
+refusal and went on with what it could read for free; that is the fallback now, not the normal
+case: a keyword table for one name costs about $0.76 through Monid, and AIsa answers a Trends
+task for about $0.011 — the same DataForSEO task, the same price.
 
 - **One adapter for Google's own numbers** (`radar/dfs.py`): a search's first page, the Trends
   series and the related queries, the monthly searches of a keyword, its difficulty, a site's
