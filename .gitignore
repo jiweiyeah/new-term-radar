@@ -14,3 +14,4 @@ build/
 dist/
 .DS_Store
 keywords.md
+uv.lock
