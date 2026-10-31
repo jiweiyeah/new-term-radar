@@ -2,7 +2,7 @@
 
 A product's first payment link says more than a launch post: someone built a thing and asked
 for money for it. Payment links are ordinary links on the seller's own page, so the public link
-graph (DataForSEO through AIsa) shows them, each with the day it was first seen:
+graph (DataForSEO through Monid) shows them, each with the day it was first seen:
 
 - Stripe Payment Links (buy.stripe.com) and Polar checkout links (buy.polar.sh): every link is one;
 - Lemon Squeezy store checkouts (<store>.lemonsqueezy.com/checkout or /buy);
@@ -20,8 +20,8 @@ link is among the newest are kept.
 Once a week (sellers.weekday, Monday by default) this reads the newest `per_platform` links and
 the newest `per_platform` sites of each platform ($0.056 a platform on 2026-10-14), keeps the links
 of new sites, drops the ones reported before and sites where anyone can post (GitHub, Reddit,
-X ...), and keeps up to `max_leads` new sellers, busiest first when a GoAnyAPI key gives their
-visits ($0.004 a site). A seller's link sits on its own home,
+X ...), and keeps up to `max_leads` new sellers, busiest first when a Monid key gives their
+visits ($0.0017 a site). A seller's link sits on its own home,
 pricing or product page; the first real run showed what else carries payment links: user pages on
 big platforms (framer.com templates, pub.dev packages, Flathub apps, forum threads, newsletters,
 news articles). So the linking page must be a short, non-content path, the site must rank
@@ -46,11 +46,11 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from pathlib import Path
 
-from . import UA, aisa, goanyapi, snap
+from . import UA, dfs, domains, llm, monid, net, rdap, snap
 from .i18n import t
 
-TOOL = "post_dataforseo_backlinks_backlinks_live"
-DOMAINS = "post_dataforseo_backlinks_referring_domains_live"
+TOOL = dfs.BACKLINKS
+DOMAINS = dfs.REFERRING
 NON_STORE = {"www", "app", "docs", "help", "status", "affiliates", "blog", "api", "assets", "discord"}
 PLATFORMS = {
     "stripe": ("buy.stripe.com", lambda host, path, *_: True),
@@ -75,8 +75,10 @@ BUILDERS = {
 }
 LABEL = {"stripe": "Stripe", "polar": "Polar", "lemonsqueezy": "Lemon Squeezy", "gumroad": "Gumroad", "creem": "Creem",
          "paddle": "Paddle", "dodo": "Dodo Payments", "waffo": "Waffo Pancake", "lovable": "Lovable", "v0": "v0", "beehiiv": "beehiiv"}
-SOURCES = {"Direct": "direct", "Search": "search", "SearchPaid": "search", "Social": "social", "SocialPaid": "social",
-           "Referrals": "referrals", "Affiliate": "referrals", "Mail": "mail", "DisplayAds": "ads", "GenAI": "AI"}
+# Similarweb's traffic sources, folded into the few the report names.
+SOURCES = {"direct": "direct", "searchOrganic": "search", "searchPaid": "search", "socialOrganic": "social",
+           "socialPaid": "social", "referrals": "referrals", "affiliate": "referrals", "mail": "mail",
+           "displayAds": "ads", "genAi": "AI"}
 # Where anyone can post: the site is not the seller.
 SHARED = {"github.com", "reddit.com", "x.com", "twitter.com", "youtube.com", "medium.com", "substack.com", "linktr.ee",
           "producthunt.com", "indiehackers.com", "facebook.com", "instagram.com", "tiktok.com", "discord.com", "google.com",
@@ -150,10 +152,10 @@ def result(data: dict, call_id: str) -> dict:
 def links(platform: str, limit: int, rank_max: int = 350, table: dict = PLATFORMS, own: bool = True) -> tuple[list[dict], int]:
     """The newest site per linking domain that carries a payment link of this platform (or a builder's badge)."""
     target, is_payment = table[platform]
-    data, cost = aisa.call([{"call_id": "b", "tool": TOOL, "arguments": {"body": [{
-        "target": target, "mode": "one_per_domain", "limit": limit, "order_by": ["first_seen,desc"], "backlinks_status_type": "live"}]}}])
+    items, cost = dfs.rows(TOOL, {"target": target, "mode": "one_per_domain", "limit": limit,
+                                   "order_by": ["first_seen,desc"], "backlinks_status_type": "live"})
     out = []
-    for i in result(data, "b").get("items") or []:
+    for i in items:
         host, path = split(i.get("url_to") or "")
         seller = (i.get("domain_from") or "").lower()
         rank = i.get("domain_from_rank") or 0
@@ -167,10 +169,10 @@ def links(platform: str, limit: int, rank_max: int = 350, table: dict = PLATFORM
 
 def started(platform: str, limit: int, table: dict = PLATFORMS) -> tuple[dict[str, str], int]:
     """{site: day} for the sites whose first link to this platform is among the newest `limit`."""
-    data, cost = aisa.call([{"call_id": "d", "tool": DOMAINS, "arguments": {"body": [{
-        "target": table[platform][0], "limit": limit, "order_by": ["first_seen,desc"], "backlinks_status_type": "live"}]}}])
+    items, cost = dfs.rows(DOMAINS, {"target": table[platform][0], "limit": limit,
+                                     "order_by": ["first_seen,desc"], "backlinks_status_type": "live"})
     return {i["domain"].lower().removeprefix("www."): str(i.get("first_seen") or "")[:10]
-            for i in result(data, "d").get("items") or [] if i.get("domain")}, cost
+            for i in items if i.get("domain")}, cost
 
 
 def first_day(host: str, sites: dict[str, str]) -> str:
@@ -185,7 +187,7 @@ def page_words(host: str, limit: int = PAGE_BYTES) -> tuple[str, str]:
     (gzip when the site offers it); empty when it does not answer."""
     try:
         req = urllib.request.Request(f"https://{host}/", headers={"User-Agent": UA, "Accept-Encoding": "gzip"})
-        with urllib.request.urlopen(req, timeout=15) as res:
+        with net.fetch(req, 15) as res:
             raw = res.read(limit)
             if res.headers.get("Content-Encoding", "").lower() == "gzip":
                 raw = zlib.decompressobj(16 + zlib.MAX_WBITS).decompress(raw, PAGE_BYTES)   # a cut stream decodes as far as it goes
@@ -203,9 +205,10 @@ def term_of(host: str, title: str) -> str:
     head = re.split(r"\s+[|\-–—:·]\s+", title)[0].strip() if title else ""
     if head and 1 <= len(head.split()) <= 4 and len(head) <= 40:
         return head.lower()
-    label = host.split(".")
-    return (label[-3] if len(label) > 2 and label[-2] in ("framer", "notion", "carrd", "webflow", "vercel", "netlify", "github")
-            else label[-2] if len(label) >= 2 else host).lower()
+    label = host.lower().split(".")
+    if len(label) > 2 and label[-2] in ("framer", "notion", "carrd", "webflow", "vercel", "netlify", "github"):
+        return label[-3]                       # a page on a builder's own site: the builder is the name
+    return domains.name_of(host)               # "vogue.com.tw" -> "vogue", not "com"
 
 
 def kind_by_rules(r: dict) -> str:
@@ -220,43 +223,50 @@ def kinds(model: str, rows: list[dict]) -> tuple[dict[str, str], str]:
         user = json.dumps([{"i": i, "domain": r["host"], "title": r.get("title", ""), "description": r.get("description", "")[:160]}
                            for i, r in enumerate(rows)], ensure_ascii=False)
         try:
-            answer = aisa.chat(model, KIND_SYSTEM, user)
+            answer = llm.chat(model, KIND_SYSTEM, user)
             m = re.search(r"\[.*\]", answer, re.S)
             for it in json.loads(m.group(0)) if m else []:
                 i = it.get("i") if isinstance(it, dict) else None
                 if isinstance(i, int) and 0 <= i < len(rows) and it.get("kind") in KINDS:
                     out[rows[i]["host"]] = it["kind"]
-        except (aisa.AisaError, ValueError) as exc:
+        except (llm.LlmError, ValueError) as exc:
             error = f"kinds: {str(exc)[:120]}"
     return {r["host"]: out.get(r["host"]) or kind_by_rules(r) for r in rows}, error
 
 
 def traffic_info(data: dict) -> dict:
-    """visits, registered, top_source and ai_share from a GoAnyAPI visits answer."""
-    series = [int(float(v)) for _, v in sorted((data.get("EstimatedMonthlyVisits") or {}).items()) if v not in (None, "")]
+    """visits, top_source and ai_share from a Similarweb answer."""
     shares: dict[str, float] = {}
-    for key, value in (data.get("TrafficSources") or {}).items():
+    for key, value in (data.get("trafficSources") or {}).items():
+        name = SOURCES.get(key, "other")
         try:
-            shares[SOURCES.get(key, "other")] = shares.get(SOURCES.get(key, "other"), 0.0) + float(value or 0)
+            shares[name] = shares.get(name, 0.0) + float(value or 0)
         except (TypeError, ValueError):
             continue
-    registered = str((data.get("DateData") or {}).get("registration") or "")[:10]
-    return {"visits": series[-1] if series else None, "registered": registered if re.fullmatch(r"\d{4}-\d{2}-\d{2}", registered) else "",
-            "top_source": max(shares, key=shares.get) if sum(shares.values()) > 0 else "",
-            "ai_share": round(shares.get("AI", 0.0), 3) if sum(shares.values()) > 0 else None}
+    total = sum(shares.values())
+    visits = data.get("monthlyVisits")
+    if not visits:
+        history = data.get("visitsHistory") or []
+        visits = history[-1].get("visits") if history else None
+    try:
+        visits = int(visits) if visits else None
+    except (TypeError, ValueError):
+        visits = None
+    return {"visits": visits, "top_source": max(shares, key=shares.get) if total > 0 else "",
+            "ai_share": round(shares.get("AI", 0.0), 3) if total > 0 else None}
 
 
 def visits(hosts: list[str]) -> tuple[dict[str, dict], int]:
-    """{host: traffic_info} for the hosts GoAnyAPI answered ($0.004 a site)."""
-    if not goanyapi.key():
+    """{host: traffic_info} for the hosts Similarweb answered ($0.0017 a site)."""
+    if not monid.key():
         return {}, 0
 
     def one(h: str):
         try:
-            data, cost = goanyapi.call("traffic", domain=h, month=3)
-        except goanyapi.GoAnyError:
+            data, cost = monid.data("anyapi", "/similarweb.overview", body={"domain": h})
+            return h, traffic_info(data), cost
+        except monid.MonidError:
             return h, None, 0
-        return h, traffic_info(data), cost
     out, cost = {}, 0
     with ThreadPoolExecutor(WORKERS) as pool:
         for h, info, c in pool.map(one, hosts):
@@ -264,6 +274,17 @@ def visits(hosts: list[str]) -> tuple[dict[str, dict], int]:
             if info is not None:
                 out[h] = info
     return out, cost
+
+
+def registration(hosts: list[str]) -> dict[str, str]:
+    """The day each host's domain was registered, from the registry's own RDAP answer (free)."""
+    def one(h: str):
+        try:
+            return h, rdap.registered(re.sub(r"^www\.", "", h))
+        except RuntimeError:
+            return h, ""
+    with ThreadPoolExecutor(WORKERS) as pool:
+        return dict(pool.map(one, hosts))
 
 
 def fresh(c: dict, seen: dict[str, str], table: dict = PLATFORMS, own: bool = True) -> dict:
@@ -276,7 +297,7 @@ def fresh(c: dict, seen: dict[str, str], table: dict = PLATFORMS, own: bool = Tr
             out["cost"] += spent
             sites, spent = started(platform, c["per_platform"], table)
             out["cost"] += spent
-        except aisa.AisaError as exc:
+        except dfs.DfsError as exc:
             out["errors"].append(f"{platform}: {exc}")
             continue
         out["read"] += len(rows)
@@ -320,9 +341,10 @@ def sellers(cfg: dict, state: Path, today: date | None = None) -> dict:
     new = sorted(pool, key=order)[:c["max_leads"] * 2]
     sizes, spent = visits([r["host"] for r in new]) if c.get("visits", True) else ({}, 0)
     cost += spent
+    born = registration(list(sizes)) if sizes else {}
     for r in new:
         info = sizes.get(r["host"]) or {}
-        r.update(visits=info.get("visits"), registered=info.get("registered", ""), top_source=info.get("top_source", ""),
+        r.update(visits=info.get("visits"), registered=born.get(r["host"], ""), top_source=info.get("top_source", ""),
                  ai_share=info.get("ai_share"))
     new = [r for r in new if (r["visits"] or 0) <= c["max_visits"]]
     new = sorted(new, key=lambda r: (KINDS.index(r["kind"]), -(r["visits"] or 0), -r["rank"]))[:c["max_leads"]]

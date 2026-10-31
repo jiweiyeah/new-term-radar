@@ -24,7 +24,7 @@ import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from . import UA, snap
+from . import UA, net, snap
 from .i18n import t
 
 PAGES = 2
@@ -38,7 +38,7 @@ def _get(path: str) -> dict:
     tok = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     if tok:
         headers["Authorization"] = f"Bearer {tok}"
-    with urllib.request.urlopen(urllib.request.Request(API + path, headers=headers), timeout=30) as res:
+    with net.fetch(urllib.request.Request(API + path, headers=headers), 30) as res:
         return json.load(res)
 
 

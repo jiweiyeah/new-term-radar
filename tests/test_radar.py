@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from radar import __main__ as cli
-from radar import breakout, config, gsc, i18n, judge, new_sites, notify, report, review, sitemaps, store
+from radar import adsense, breakout, config, cws, dfs, domains, gsc, i18n, judge, new_sites, notify, report, review, sitemaps, store
 from radar import page_age as _page_age
 from radar.sources import base_name, novel_names
 from radar.terms import names
@@ -172,17 +172,6 @@ def test_new_site_name_terms():
     assert new_sites.name_terms("ai-video-tool.com") == []   # only stop words left
 
 
-def test_new_sites_drop_domains_ranking_for_a_handful_of_terms(cfg, tmp_path, monkeypatch):
-    sent = []
-    cfg["new_sites"]["words"] = 0                              # the words each site ranks for: their own test below
-    monkeypatch.setattr(new_sites.aisa, "rest", lambda path, task: (sent.append((path, task)) or {"items": json.loads(FIXTURE.read_text())}, 121200))
-    out = new_sites.new_sites(cfg, tmp_path, date(2026, 10, 6))
-    domains = [r["domain"] for r in out["sites"]]
-    assert "ai-hailuo.com" in domains and "neonwin386.ai" not in domains and "oyo88.ai" not in domains
-    assert all(r["new"] for r in out["sites"]) and "hailuo" in [t["term"] for t in out["terms"]]
-    assert sent[0][0] == "domain_analytics/whois/overview/live" and out["cost_micros"] == 121200 * len(cfg["new_sites"]["queries"])
-    again = new_sites.new_sites(cfg, tmp_path, date(2026, 10, 13))
-    assert not any(r["new"] for r in again["sites"]) and again["terms"] == []
 
 
 def test_new_sites_query_needs_both_dates(cfg):
@@ -200,44 +189,8 @@ def ranked(word, pos, loc=2840, vol=30, kd=0, new=True):
                                     "previous_updated_time": "2026-08-26 03:00:00 +00:00", "last_updated_time": "2026-10-06 03:00:00 +00:00"}}
 
 
-def test_a_new_site_comes_with_the_first_words_it_ranks_for(cfg, tmp_path, monkeypatch):
-    from radar import site_words
-    asked = []
-
-    def rest(path, task):
-        asked.append((path, task.get("target")))
-        if path == new_sites.PATH:
-            return {"items": json.loads(FIXTURE.read_text())}, 121200
-        if len(asked) == 2:                                    # the first site asked ranks; the second does not yet
-            return {"total_count": 7, "items": [ranked("typing test 15 seconds", 1), ranked("股价走势", 6, loc=2158, vol=1000, kd=None, new=False)]}, 12240
-        return {"total_count": None, "items": None}, 12000
-    monkeypatch.setattr(new_sites.aisa, "rest", rest)
-    cfg["new_sites"]["words"] = 2
-    out = new_sites.new_sites(cfg, tmp_path, date(2026, 10, 6))
-    worded = [r for r in out["sites"] if "words" in r]
-    assert len(worded) == 2 and [p for p, d in asked].count(site_words.PATH) == 2
-    hailuo = next(r for r in out["sites"] if r["domain"] == asked[1][1])
-    assert hailuo["top"] == 7 and hailuo["words"][0] == {"word": "typing test 15 seconds", "position": 1, "volume": 30, "kd": 0,
-                                                         "country": "US", "url": "/typing-test-15-seconds",
-                                                         "since": "2026-08-26..2026-10-06"}
-    assert hailuo["words"][1]["country"] == "TW" and hailuo["words"][1]["since"] == ""
-    assert out["cost_micros"] == 121200 * len(cfg["new_sites"]["queries"]) + 12240 + 12000
-    lines = "\n".join(report._site_word_lines(worded))
-    assert f"- {asked[1][1]}: ⏱ typing test 15 seconds #1 US, 30/mo, KD 0; 股价走势 #6 TW, 1000/mo, KD —" in lines
-    assert "(of 7 in the top 20)" in lines and "none in the top 20 yet" in lines
-    again = new_sites.new_sites(cfg, tmp_path, date(2026, 10, 13))       # seen before: no words asked again
-    assert not any("words" in r for r in again["sites"])
 
 
-def test_a_failed_words_call_is_named_and_the_sites_still_come(cfg, tmp_path, monkeypatch):
-    def rest(path, task):
-        if path == new_sites.PATH:
-            return {"items": json.loads(FIXTURE.read_text())}, 121200
-        raise new_sites.aisa.AisaError("Internal Server Error.")
-    monkeypatch.setattr(new_sites.aisa, "rest", rest)
-    cfg["new_sites"]["words"] = 1
-    out = new_sites.new_sites(cfg, tmp_path, date(2026, 10, 6))
-    assert out["sites"] and len(out["errors"]) == 1 and out["errors"][0].endswith("words: Internal Server Error.")
 
 
 def test_rest_reads_a_dataforseo_answer_and_its_cost(monkeypatch):
@@ -275,25 +228,8 @@ def test_judge_parses_scores_and_drops_what_it_cannot_use():
     assert judge.parse("sorry", 3) == {}
 
 
-def test_judge_scores_rows_in_chunks(monkeypatch):
-    rows = [{"term": f"t{i}", "examples": []} for i in range(judge.CHUNK + 2)]
-    sizes = []
-
-    def chat(model, system, user):
-        n = len(json.loads(user))
-        sizes.append(n)
-        return json.dumps([{"i": i, "score": 0.8} for i in range(n)])
-    monkeypatch.setattr(judge.aisa, "chat", chat)
-    assert judge.score(rows, "m") == {"judged": judge.CHUNK + 2} and sizes == [judge.CHUNK, 2]
-    assert all(r["named"] == 0.8 for r in rows)
 
 
-def test_judge_failure_leaves_rows_unscored(monkeypatch):
-    def chat(*a):
-        raise judge.aisa.AisaError("HTTP 402: no credit")
-    monkeypatch.setattr(judge.aisa, "chat", chat)
-    rows = [{"term": "strata", "examples": []}]
-    assert "error" in judge.score(rows, "m") and "named" not in rows[0]
 
 
 # --- merging the signals ---------------------------------------------------------------------
@@ -405,26 +341,8 @@ def test_review_verdict_miss_and_no_data():
     assert review.verdict({"a": {"rose": False, "no_data": True}}, SEEN) == ("no_data", None)
 
 
-def test_review_sends_one_trends_task_per_call():
-    # DataForSEO's live endpoint runs only the first task of a body
-    due = [("strata", date(2026, 9, 25), ["strata", "niko1221 strata", "niko strata", "a fourth"]), ("veo 3 free", date(2026, 10, 3), [])]
-    calls, plan = review.plan_calls(due, date(2026, 10, 17))
-    assert len(calls) == 4 and all(len(c["arguments"]["body"]) == 1 for c in calls)
-    assert [c["arguments"]["body"][0]["keywords"] for c in calls[:3]] == [["strata"], ["niko1221 strata"], ["niko strata"]]
-    assert calls[3]["arguments"]["body"][0]["keywords"] == ["veo 3 free"]
-    assert calls[0]["arguments"]["body"][0]["date_to"] == "2026-10-09" and calls[3]["arguments"]["body"][0]["date_to"] == "2026-10-17"
 
 
-def test_review_stores_the_verdict(cfg, tmp_path, monkeypatch):
-    conn = store.connect(tmp_path)
-    store.record(conn, [_lead("niko strata", ["breakout"])], SEEN)
-    points = [{"date_from": (date(2026, 9, 19) + timedelta(days=i)).isoformat(), "values": [v]}
-              for i, v in enumerate([0, 0, 0, 0, 0, 0, 0, 0, 0, 30, 30, 100, 0, 0])]
-    answer = {"tasks": [{"result": [{"items": [{"data": points}]}]}]}
-    monkeypatch.setattr(review.aisa, "call_all", lambda calls: ({c["call_id"]: answer for c in calls}, 1200))
-    out = review.review(cfg, conn, date(2026, 10, 10))
-    assert out["checked"] == [{"term": "niko strata", "first_seen": "2026-09-25", "verdict": "hit", "lead_days": 3}]
-    assert conn.execute("SELECT verdict, lead_days FROM leads").fetchone() == ("hit", 3)
 
 
 # --- the two commands ---------------------------------------------------------------------------
@@ -611,6 +529,12 @@ def _fake_usecase_network(monkeypatch):
              "pair": [(d, v, 40) for d, v in (rise if k == "synthid detector" else flat)]} for k in keywords}, 7200))
 
 
+def _fake_optional_readings(monkeypatch):
+    """The related queries and the one-country series are readings of their own; here they bring nothing."""
+    monkeypatch.setattr(usecases.google, "related_queries", lambda terms, geo: ({}, 0, []))
+    monkeypatch.setattr(usecases, "country_series", lambda rows, c: ({}, 0, []))
+
+
 def test_usecases_run_builds_one_table_and_reads_a_name_twice(cfg, tmp_path, monkeypatch):
     _fake_usecase_network(monkeypatch)
     uc = usecases.run(cfg, tmp_path, ["synthid detector"], {}, TODAY)
@@ -636,26 +560,8 @@ def test_keyword_table_marks_brands_and_generic_terms_become_leads(cfg, tmp_path
     assert [x["term"] for x in leads] == ["ai image detector", "photoshop alternative"] and leads[0]["kinds"] == ["usecase"]
 
 
-def test_review_ignores_the_unsettled_days(cfg, tmp_path, monkeypatch):
-    conn = store.connect(tmp_path)
-    store.record(conn, [_lead("ai image detector", ["usecase"])], date(2026, 9, 28))
-    points = [{"date_from": d.isoformat(), "values": [v]} for d, v in _daily([5] * 43 + [0, 100])]
-    answer = {"tasks": [{"result": [{"items": [{"data": points}]}]}]}
-    monkeypatch.setattr(review.aisa, "call_all", lambda calls: ({c["call_id"]: answer for c in calls}, 1200))
-    assert review.review(cfg, conn, TODAY)["checked"][0]["verdict"] == "miss"
 
 
-def test_screen_drops_loosely_related_keywords_and_keeps_all_when_the_call_fails(monkeypatch):
-    cands = [{"phrase": p, "brand": False} for p in ("ai image detector", "chatgpt alternative", "ai audio detector")]
-    ev = {"posts": [{"text": "check if any image is AI generated", "likes": 900, "by": "a"}], "readme": ""}
-    monkeypatch.setattr(usecases.aisa, "chat", lambda *a, **k: '[{"i": 0, "score": 0.95}, {"i": 1, "score": 0.2}, {"i": 2, "score": 0.7}]')
-    kept = usecases.relevant(usecases.screen("m", "synthid detector", ev, cands))
-    assert [(c["phrase"], c["relevance"]) for c in kept] == [("ai image detector", 0.95), ("ai audio detector", 0.7)]
-
-    def down(*a, **k):
-        raise usecases.aisa.AisaError("HTTP 500")
-    monkeypatch.setattr(usecases.aisa, "chat", down)
-    assert usecases.screen("m", "synthid detector", ev, cands) == cands
 
 
 def test_momentum_is_the_last_settled_week_against_the_week_before():
@@ -674,21 +580,13 @@ def test_related_queries_split_into_long_tails_and_candidates():
     assert cands[0]["source"] == "searched" and "rising" in cands[0]["evidence"]
 
 
-def test_screen_marks_brands_and_other_names(monkeypatch):
-    cands = [{"phrase": "free up mac disk space", "brand": False, "source": "model"},
-             {"phrase": "gpt image 2.5", "brand": False, "source": "searched"}]
-    monkeypatch.setattr(usecases.aisa, "chat", lambda *a, **k:
-                        '[{"i": 0, "score": 0.8, "brand": true, "name": false}, {"i": 1, "score": 0.1, "brand": true, "name": true}]')
-    viewed = usecases.screen("m", "removemacai", {"posts": [], "readme": "frees 12 GB"}, cands)
-    assert viewed[0]["brand"] and viewed[1]["is_name"]
-    assert [c["phrase"] for c in usecases.relevant(viewed)] == ["free up mac disk space"]
 
 
-def test_with_a_key_related_queries_join_the_table_and_other_names_become_leads(cfg, tmp_path, monkeypatch):
+def test_related_queries_join_the_table_and_other_names_become_leads(cfg, tmp_path, monkeypatch):
     _fake_usecase_network(monkeypatch)
-    monkeypatch.setenv("GOANYAPI_API_KEY", "k")
-    monkeypatch.setattr(usecases.goanyapi, "related_queries", lambda name, geo: (
-        {"rising": ["ai photo detector", "gpt image 2.5", "synthid detector online"], "top": []}, 6000))
+    monkeypatch.setattr(dfs, "keyed", lambda: True)      # a door is open: the related queries are bought
+    monkeypatch.setattr(usecases.google, "related_queries", lambda terms, geo: (
+        {t: {"rising": ["ai photo detector", "gpt image 2.5", "synthid detector online"], "top": []} for t in terms}, 6000, []))
     monkeypatch.setattr(usecases, "screen", lambda model, name, ev, cands: [
         dict(c, relevance=0.9, is_name=c["phrase"] == "gpt image 2.5") for c in cands])
     monkeypatch.setattr(usecases, "volumes", lambda phrases, loc: (
@@ -705,19 +603,47 @@ def test_with_a_key_related_queries_join_the_table_and_other_names_become_leads(
     assert {"term": "gpt image 2.5", "kinds": ["cosearch"]}.items() <= report.usecase_leads(uc)[-1].items()
 
 
-def test_without_a_key_the_table_says_the_source_is_off_and_a_failure_is_reported(cfg, tmp_path, monkeypatch):
+def test_with_the_related_queries_off_the_table_says_so_and_a_failure_is_reported(cfg, tmp_path, monkeypatch):
     _fake_usecase_network(monkeypatch)
-    uc = usecases.run(cfg, tmp_path, ["synthid detector"], {}, TODAY)
-    assert not uc["related"] and "GOANYAPI_API_KEY" in "\n".join(report.keyword_table(cfg, uc))
-    monkeypatch.setenv("GOANYAPI_API_KEY", "k")
-
-    def down(name, geo):
-        raise usecases.goanyapi.GoAnyError("HTTP 502")
-    monkeypatch.setattr(usecases.goanyapi, "related_queries", down)
+    monkeypatch.setattr(dfs, "keyed", lambda: True)
+    cfg["usecases"]["related"] = False
     cfg["usecases"]["country_trends"] = False
+    uc = usecases.run(cfg, tmp_path, ["synthid detector"], {}, TODAY)
+    assert not uc["related"] and "off in the config" in "\n".join(report.keyword_table(cfg, uc))
+    cfg["usecases"]["related"] = True
+
+    def down(terms, geo):
+        return {}, 0, [f"{t}: HTTP 502" for t in terms]
+    monkeypatch.setattr(usecases.google, "related_queries", down)
     uc = usecases.run(cfg, tmp_path / "b", ["synthid detector"], {}, TODAY)
     assert uc["related_errors"] == ["synthid detector: HTTP 502"] and uc["kept"] == 2
     assert "HTTP 502" in "\n".join(report.keyword_table(cfg, uc))
+
+
+def test_without_a_key_the_related_queries_are_not_bought(cfg, tmp_path, monkeypatch):
+    _fake_usecase_network(monkeypatch)
+    asked = []
+
+    def related(terms, geo):
+        asked.extend(terms)
+        return {t: {"rising": [], "top": []} for t in terms}, 0, []
+    monkeypatch.setattr(usecases.google, "related_queries", related)
+    monkeypatch.setattr(usecases.google, "daily_series", lambda terms, geo: ({}, 0, []))
+    uc = usecases.run(cfg, tmp_path, ["synthid detector"], {}, TODAY)
+    assert asked == [] and not uc["related"] and "no key to buy them" in "\n".join(report.keyword_table(cfg, uc))
+
+
+def test_a_reading_that_cannot_be_bought_is_named_and_the_table_still_comes_out(cfg, tmp_path, monkeypatch):
+    _fake_usecase_network(monkeypatch)
+
+    def down(phrases, loc):
+        raise dfs.DfsError("Monid: BLOCKED: insufficient_wallet_balance; AIsa: HTTP 402")
+    monkeypatch.setattr(usecases, "volumes", down)
+    uc = usecases.run(cfg, tmp_path, ["synthid detector"], {}, TODAY)
+    assert uc["read_errors"] and "insufficient_wallet_balance" in uc["read_errors"][0]
+    assert usecases.degraded(uc) and uc["rows"] and uc["rows"][0]["decision"] == "watch"   # no data: nothing is prioritized
+    text = "\n".join(report.keyword_table(cfg, uc))
+    assert "Some readings failed" in text and "insufficient_wallet_balance" in text
 
 
 def test_other_names_leave_out_old_products_siblings_and_spelling_variants():
@@ -735,7 +661,11 @@ def test_every_name_gets_the_country_series_and_the_cap_is_on_generic_terms(cfg,
            [{"phrase": f"g{v}", "kind": "generic", "volume": v} for v in (27100, 22200, 8100, 6600, 900)]
     cfg["usecases"]["country_max"] = 3
     asked = []
-    monkeypatch.setattr(usecases.goanyapi, "daily_series", lambda term, geo: (asked.append(term) or [(TODAY, 1)], 6000))
+
+    def daily_series(terms, geo):
+        asked.extend(terms)
+        return {t: [(TODAY, 1)] for t in terms}, 6000 * len(terms), []
+    monkeypatch.setattr(usecases.google, "daily_series", daily_series)
     out, cost, errors = usecases.country_series(rows, cfg["usecases"])
     assert sorted(asked) == sorted([f"name{i}" for i in range(5)] + ["g27100", "g22200", "g8100"]) and cost == 48000 and not errors
 
@@ -749,7 +679,7 @@ def test_other_names_must_be_rising_and_not_the_same_family():
 # --- one country's settled series for the rows that matter -------------------------------------
 
 def _month(values):
-    """A 30-day series ending today, as goanyapi.daily_series returns it."""
+    """A 30-day series ending today, as google.daily_series returns it."""
     return [(TODAY - timedelta(days=len(values) - 1 - i), v) for i, v in enumerate(values)]
 
 
@@ -766,20 +696,19 @@ def test_a_flat_country_series_stays_flat():
 
 def test_names_and_big_generic_terms_take_their_shape_from_the_country(cfg, tmp_path, monkeypatch):
     _fake_usecase_network(monkeypatch)
-    monkeypatch.setenv("GOANYAPI_API_KEY", "k")
+    monkeypatch.setattr(dfs, "keyed", lambda: True)
     cfg["usecases"]["related"] = False
     up = _month([50] * 24 + [77, 86, 83, 100, 94, 79])
     asked = []
 
-    def daily_series(term, geo):
-        asked.append(term)
-        if term == "synthid detector":
-            raise usecases.goanyapi.GoAnyError("HTTP 502")
-        return up, 6000
-    monkeypatch.setattr(usecases.goanyapi, "daily_series", daily_series)
+    def daily_series(terms, geo):
+        asked.extend(terms)
+        return ({t: up for t in terms if t != "synthid detector"}, 6000 * len(terms),
+                ["synthid detector: HTTP 502"] if "synthid detector" in terms else [])
+    monkeypatch.setattr(usecases.google, "daily_series", daily_series)
     uc = usecases.run(cfg, tmp_path, ["synthid detector"], {}, TODAY)
     rows = {r["phrase"]: r for r in uc["rows"]}
-    # The lookups run three at a time, so the order they are recorded in is the threads' own.
+    # The lookups run side by side, so the order they are recorded in is the threads' own.
     assert sorted(asked) == ["ai image detector", "photoshop alternative", "synthid detector"]
     assert rows["ai image detector"]["trend_geo"] and rows["ai image detector"]["now"] == "rising"
     assert rows["ai image detector"]["decision"] == "prioritize"      # flat worldwide, up in the US
@@ -789,16 +718,15 @@ def test_names_and_big_generic_terms_take_their_shape_from_the_country(cfg, tmp_
     assert "This table is incomplete today" in text
 
 
-def test_small_generic_terms_are_not_worth_a_country_lookup(cfg):
+def test_small_generic_terms_are_not_worth_a_country_lookup(cfg, monkeypatch):
     rows = [{"phrase": "a", "kind": "generic", "volume": 300}, {"phrase": "b", "kind": "generic", "volume": 5000}, {"phrase": "n", "kind": "name"}]
     asked = []
-    import radar.goanyapi as g
-    orig = g.daily_series
-    g.daily_series = lambda term, geo: (asked.append(term) or [], 0)
-    try:
-        usecases.country_series(rows, cfg["usecases"])
-    finally:
-        g.daily_series = orig
+
+    def daily_series(terms, geo):
+        asked.extend(terms)
+        return {t: [] for t in terms}, 0, []
+    monkeypatch.setattr(usecases.google, "daily_series", daily_series)
+    usecases.country_series(rows, cfg["usecases"])
     assert asked == ["n", "b"]
 
 
@@ -818,16 +746,6 @@ def test_only_things_are_read_for_generic_terms_not_words_that_surged():
     assert usecases.names_to_read(today, recent) == ["photocraft", "hailuo", "qwen image 2.1"]
 
 
-def test_a_failed_post_search_costs_one_name_its_posts_not_the_step(monkeypatch):
-    def call(calls):
-        if "photocraft" in calls[0]["arguments"]["query"]:
-            raise usecases.aisa.AisaError("HTTP 504: <html><h1>504 Gateway Time-out</h1></html>")
-        return {"s": {"tweets": [{"text": "check any image", "likeCount": 900, "author": {"userName": "a"}}]}}, 3000
-    monkeypatch.setattr(usecases.aisa, "call", call)
-    monkeypatch.setattr(usecases, "_readme", lambda repo: "PhotoCraft opens real PSD files")
-    ev, cost = usecases.evidence(["photocraft", "synthid detector"], {"photocraft": "storytold/photocraft"}, TODAY)
-    assert cost == 3000 and ev["photocraft"]["readme"] and ev["photocraft"]["posts"] == []
-    assert ev["photocraft"]["error"] == "HTTP 504: 504 Gateway Time-out" and len(ev["synthid detector"]["posts"]) == 1
 
 
 # --- names someone asks about: the `keywords` command and the MCP tool ---------------------------
@@ -991,10 +909,11 @@ def test_the_mcp_command_says_what_is_missing(monkeypatch, capsys):
 from radar import competition  # noqa: E402
 
 
-def _serp(results, ads=False):
+def _serp(results, ads=False, count=19500):
+    """A search's first page, the way DataForSEO answers it: the items, and Google's own count."""
     items = [{"type": "ai_overview"}] + [{"type": "organic", "domain": d, "url": u, "title": t, "rank_group": i + 1}
                                          for i, (d, u, t) in enumerate(results)]
-    return {"tasks": [{"result": [{"items": items + ([{"type": "paid"}] if ads else [])}]}]}
+    return {"items": items + ([{"type": "paid", "domain": "paid.example"}] if ads else []), "se_results_count": count}
 
 
 def test_page_one_verdicts():
@@ -1057,53 +976,6 @@ def test_rdap_is_asked_once_more_and_a_registry_without_it_says_none(monkeypatch
     assert REAL_ASK("busy.example") == ("", "failed")
 
 
-def test_a_crowded_rising_term_is_watched_not_prioritized(cfg, tmp_path, monkeypatch):
-    cfg["competition"]["max_rows"] = 8
-    monkeypatch.setenv("GOANYAPI_API_KEY", "k")
-    strong = [("canva.com", "https://canva.com/ai", "Canva AI"), ("adobe.com", "https://adobe.com/x", "Adobe")]
-    weak = [("tiny1.ai", "https://tiny1.ai/", "Free Tool"), ("tiny2.ai", "https://tiny2.ai/", "Free Tool"),
-            ("tiny3.ai", "https://tiny3.ai/x", "A guide")]
-    pages = {"crowded term": _serp(strong, ads=True), "open term": _serp(strong + weak)}
-
-    def call(calls):
-        c = calls[0]
-        if c["call_id"] == "serp":
-            return {"serp": pages[c["arguments"]["body"][0]["keyword"]]}, 2000
-        items = [{"keyword": k, "keyword_properties": {"keyword_difficulty": 60 if k == "crowded term" else 25}}
-                 for k in c["arguments"]["body"][0]["keywords"]]
-        return {"kd": {"tasks": [{"result": [{"items": items}]}]}}, 12000
-    monkeypatch.setattr(competition.aisa, "call", call)
-    rated = {"canva.com": 94, "adobe.com": 96, "tiny1.ai": 8, "tiny2.ai": 12, "tiny3.ai": 21}
-    asked = []
-
-    def goany(path, **p):
-        if path == "dr":
-            asked.append(p["domain"])
-            return {"domain_rating": rated[p["domain"]]}, 2000
-        if path == "google-intitle":
-            return {"intitleCount": 19500}, 4000
-        return {"domains": ["paid.example"] if p["keyword"] == "crowded term" else [], "advertisers": []}, 4000
-    monkeypatch.setattr(competition.goanyapi, "call", goany)
-    rows = [{"phrase": "crowded term", "decision": "prioritize"}, {"phrase": "open term", "decision": "prioritize"},
-            {"phrase": "faded", "decision": "skip"}]
-    cost, errors = competition.assess(rows, cfg, tmp_path)
-    crowded, opened, faded = rows
-    assert crowded["decision"] == "watch" and crowded["demoted"] and crowded["competition"]["ads"]
-    assert crowded["competition"]["verdict"] == "crowded" and crowded["competition"]["weak"] == 0
-    assert opened["decision"] == "prioritize" and opened["competition"]["weak"] == 3
-    assert opened["competition"]["weakest"] == {"domain": "tiny1.ai", "dr": 8, "position": 3, "url": "https://tiny1.ai/"}
-    assert "competition" not in faded and errors == [] and cost == 2 * 2000 + 12000 + 5 * 2000 + 2 * (4000 + 4000)
-    assert crowded["competition"]["built"] == 19500 and crowded["competition"]["paid"] == ["paid.example"]
-    competition.assess([{"phrase": "open term", "decision": "watch"}], cfg, tmp_path)
-    assert len(asked) == 5                                    # ratings are kept 30 days, not bought again
-    uc = {"names": ["x"], "rows": [dict(r, kind="generic", names=["x"], brand=False, new=True, now="rising", peak_day="2026-10-10",
-                                       evidence="") for r in rows[:2]],
-          "proposed": 2, "relevant": 2, "kept": 2, "benchmark": "gpts", "volume_month": "2026-08", "related": True}
-    text = "\n".join(report.keyword_table(cfg, uc))
-    assert "crowded · 0 weak · KD 60 · ads · 19,500 pages built · 1 advertisers" in text and "watch ↓" in text
-    assert "open · 3 weak · KD 25 · 19,500 pages built · AI overview |" in text and "advertising on it: paid.example" in text
-    assert "tiny1.ai (rated 8) at #3" in text and "Page one: open = three or more" in text
-    assert "**crowded term**: no easy slot, even the weakest, canva.com, is rated 94 (#1)" in text
 
 
 
@@ -1193,46 +1065,29 @@ def _reddit_post(pid, title, score=12, sub="VideoEditors"):
             "url": f"https://www.reddit.com/r/{sub}/{pid}", "created": 0}
 
 
-def test_asks_turns_reddit_requests_into_sized_jobs(cfg, tmp_path, monkeypatch):
-    cfg["asks"]["patterns"] = ['"is there an ai tool"', '"how do i automate"']
-    posts = {'"is there an ai tool"': [_reddit_post("a", "Is there an AI tool to add b-roll automatically?", 45),
-                                       _reddit_post("b", "Any AI that turns slides into notes?", 35, "college"),
-                                       _reddit_post("c", "Rate my setup", 1)],
-             '"how do i automate"': [_reddit_post("a", "Is there an AI tool to add b-roll automatically?", 45)]}
-    monkeypatch.setattr(asks.social, "reddit", lambda q, **k: (posts[q], 1880))
-    monkeypatch.setattr(asks.aisa, "chat", lambda model, system, user: json.dumps(
-        [{"i": i, "kind": "request", "job": job, "ai": True} for i, job in enumerate(
-            ["add b roll automatically", "convert slides to notes"])]))
-    monkeypatch.setattr(asks.usecases, "volumes", lambda phrases, loc: (
-        {"add b roll automatically": {"volume": 880}, "convert slides to notes": {"volume": 10}}, 90000))
-    first = asks.asks(cfg, tmp_path)
-    assert first["read"] == 2 and first["asks"] == 2 and first["unsized"] == 1          # "rate my setup" scored under the floor
-    assert [r["phrase"] for r in first["rows"]] == ["add b roll automatically"] and first["cost_micros"] == 2 * 1880 + 90000
-    assert first["terms"][0]["note"] == "Reddit: asked 1× (r/VideoEditors)"
-    assert [q["phrase"] for q in first["quiet"]] == ["convert slides to notes"]           # asked, too few searches yet
-    text = "\n".join(report._asks_lines(first, cfg))
-    assert "| **add b roll automatically** | 1 (45) | r/VideoEditors | 880 |" in text and "do not republish" in text
-    assert "| convert slides to notes | 1 (35) | r/college |" in text and "ideas rather than keywords" in text
-    again = asks.asks(cfg, tmp_path)
-    assert again["rows"][0]["again"] and again["terms"] == []                            # reported once
 
 
 def test_pains_groups_reviews_posts_and_comments_into_gaps(cfg, monkeypatch):
-    monkeypatch.setenv("GOANYAPI_API_KEY", "k")
     ext = "a" * 32
 
-    def serp(q, gl="US"):
-        if q.startswith("site:chromewebstore"):
-            return [{"url": f"https://chromewebstore.google.com/detail/headshot-ai/{ext}", "title": "x", "rank": 1}], 2000
-        return [{"url": "https://www.youtube.com/watch?v=abcdefghijk", "title": "tutorial", "rank": 1}], 2000
-    monkeypatch.setattr(pains.goanyapi, "serp", serp)
-    monkeypatch.setattr(pains.goanyapi, "chrome_reviews", lambda e, c="": (
-        [{"rating": 1, "text": "Needs a photo of your face, no way to upload a group shot", "date": "2026-10-13"},
-         {"rating": 5, "text": "Great!", "date": "2026-10-12"}], "", 3000))
+    def serp(keyword, location_code=2840, language="en", device="desktop", depth=10):
+        url = "https://www.youtube.com/watch?v=abcdefghijk"
+        return {"items": [{"type": "organic", "domain": "shop.example", "url": url, "title": "x", "rank_group": 1}],
+                "results_count": 100}, 2000
+    monkeypatch.setattr(pains.google, "serp", serp)
+    monkeypatch.setattr(pains.cws, "search", lambda keyword, limit=10: [ext])   # the store's own search
+
+    def reviews(handle, stars=None, limit=100):     # the store's own call, one star level at a time
+        if stars != 1:
+            return []
+        return [{"rating": 1, "text": "Needs a photo of your face, no way to upload a group shot", "date": "2026-10-13"},
+                {"rating": 5, "text": "Great!", "date": "2026-10-12"}]
+    monkeypatch.setattr(pains.cws, "page", lambda ext: {"id": ext, "path": "", "sid": "", "bl": "", "rpcids": ["x"]})
+    monkeypatch.setattr(pains.cws, "reviews", reviews)
     monkeypatch.setattr(pains.social, "reddit", lambda q, **k: ([_reddit_post("r1", "Headshot apps all look plastic")], 1880))
     monkeypatch.setattr(pains.social, "youtube_comments", lambda vid: ([{"text": "Is there a way to do this for a whole team at once?", "likes": 40},
                                                                         {"text": "nice", "likes": 0}], 1000))
-    monkeypatch.setattr(pains.aisa, "chat", lambda model, system, user, max_tokens=2500: json.dumps([
+    monkeypatch.setattr(pains.llm, "chat", lambda model, system, user, max_tokens=2500: json.dumps([
         {"gap": "No team or group headshots", "kind": "missing", "items": [0, 2], "phrase": "ai headshots for teams"},
         {"gap": "Results look plastic", "kind": "quality", "items": [1]}]))
     result = pains.run(cfg, "ai headshot")
@@ -1244,10 +1099,11 @@ def test_pains_groups_reviews_posts_and_comments_into_gaps(cfg, monkeypatch):
 
 def test_tutorial_asks_only_for_leads_marked_one_click(cfg, monkeypatch):
     cfg["tutorials"]["max_leads"] = 3
-    monkeypatch.setenv("GOANYAPI_API_KEY", "k")
-    monkeypatch.setattr(pains.goanyapi, "serp", lambda q, gl="US": ([{"url": "https://www.youtube.com/watch?v=abcdefghijk", "title": "t", "rank": 1}], 2000))
+    monkeypatch.setattr(pains.google, "serp", lambda keyword, location_code=2840, language="en", device="desktop", depth=10: (
+        {"items": [{"type": "organic", "domain": "shop.example", "url": "https://www.youtube.com/watch?v=abcdefghijk",
+                    "title": "t", "rank_group": 1}], "results_count": 100}, 2000))
     monkeypatch.setattr(pains.social, "youtube_comments", lambda vid: ([{"text": "Can someone make this one click? Too many steps", "likes": 12}], 1000))
-    monkeypatch.setattr(pains.aisa, "chat", lambda model, system, user, max_tokens=2500: json.dumps(
+    monkeypatch.setattr(pains.llm, "chat", lambda model, system, user, max_tokens=2500: json.dumps(
         [{"gap": "Too many manual steps", "kind": "wants a tool", "items": [0], "phrase": "one click blender export"}]))
     out = pains.tutorial_asks(cfg, [{"term": "opus blender game", "one_click": "tutorial"}, {"term": "plain", "one_click": None}])
     assert [x["term"] for x in out["leads"]] == ["opus blender game"] and out["cost_micros"] == 2000 + 1000
@@ -1272,46 +1128,6 @@ def _sites(names):
     return {"d": {"tasks": [{"result": [{"items": [{"domain": d, "first_seen": "2026-10-13 21:00:00 +00:00"} for d in names]}]}]}}
 
 
-def test_sellers_keep_payment_links_and_leave_out_the_rest(cfg, tmp_path, monkeypatch):
-    cfg["sellers"]["platforms"] = ["stripe", "lemonsqueezy", "gumroad", "creem"]
-    answers = {
-        "buy.stripe.com": [("pestora.framer.website", "https://buy.stripe.com/aFa28rbpG9"), ("github.com", "https://buy.stripe.com/x"),
-                           ("permit-records-demo.com", "https://buy.stripe.com/old"), ("try.demotools.dev", "https://buy.stripe.com/t")],
-        "lemonsqueezy.com": [("meeting-demo.app", "https://merit.lemonsqueezy.com/checkout/buy/c0b375"), ("seo.shop", "https://lemonsqueezy.com/"),
-                             ("x.app", "https://www.lemonsqueezy.com/checkout")],
-        "gumroad.com": [("janemaker.com", "https://janemaker.gumroad.com/l/toxins-in-textiles"), ("spam-network-demo.com", "https://spamseller.gumroad.com/"),
-                        ("community.n8n.io", "https://x.gumroad.com/l/invoice-flow")],
-        "creem.io": [("launch-demo.app", "https://www.creem.io/payment/prod_59Tt3"), ("docs.example", "https://docs.creem.io/api-reference")],
-    }
-    # the sites whose first link is new; permit-records-demo.com has sold for years, demotools.dev is named by its parent domain
-    new = {target: [d for d, _ in rows if d not in ("permit-records-demo.com", "try.demotools.dev")] for target, rows in answers.items()}
-    new["buy.stripe.com"].append("demotools.dev")
-
-    def call(calls):
-        target = calls[0]["arguments"]["body"][0]["target"]
-        return (_sites(new[target]) if calls[0]["tool"] == sellers.DOMAINS else _backlinks(answers[target])), 27600
-    monkeypatch.setattr(sellers.aisa, "call", call)
-    monkeypatch.setattr(sellers, "page_words", lambda host: ("Pestora — pest control software", "Book and bill pest jobs") if host.startswith("pestora")
-                        else ("", ""))
-    kinds = {"pestora.framer.website": "ai", "meeting-demo.app": "ai", "janemaker.com": "content", "launch-demo.app": "ai", "try.demotools.dev": "ai"}
-
-    def chat(model, system, user, max_tokens=1500):
-        return json.dumps([{"i": x["i"], "kind": kinds[x["domain"]]} for x in json.loads(user)])
-    monkeypatch.setattr(sellers.aisa, "chat", chat)
-    first = sellers.sellers(cfg, tmp_path)
-    hosts = {s["host"]: s for s in first["sellers"]}
-    assert [s["kind"] for s in first["sellers"]] == ["ai", "ai", "ai", "ai", "content"]                 # AI and software first
-    assert set(hosts) == {"pestora.framer.website", "meeting-demo.app", "janemaker.com", "launch-demo.app", "try.demotools.dev"}
-    assert first["old"] == 1                                                                            # an old seller's new page
-    assert hosts["pestora.framer.website"]["first_seen"] == "2026-10-13"                                # the day the site first linked
-    assert hosts["pestora.framer.website"]["term"] == "pestora" and hosts["janemaker.com"]["term"] == "janemaker"
-    assert first["first_run"] and first["cost_micros"] == 8 * 27600
-    lead = [x for x in first["terms"] if x["term"] == "pestora"][0]
-    assert lead["about"] == ("https://pestora.framer.website/", "Pestora — pest control software. Book and bill pest jobs")
-    text = "\n".join(report._seller_lines(first))
-    assert "| [meeting-demo.app](https://meeting-demo.app/) | AI / software | Lemon Squeezy |" in text and "not that it sells well" in text
-    again = sellers.sellers(cfg, tmp_path)
-    assert again["sellers"] == [] and not again["first_run"]                                              # each site reported once
 
 
 def test_a_seller_is_new_only_when_the_site_first_linked_lately():
@@ -1346,83 +1162,12 @@ def _history_page(items, token):
     return {"h": {"tasks": [{"status_code": 20000, "result": [{"items": items, "search_after_token": token}]}]}}
 
 
-def test_history_pulls_every_page_and_picks_up_where_it_stopped(tmp_path, monkeypatch):
-    monkeypatch.setattr(seller_history, "PAGE", 2)
-    item = lambda d, url, day: {"domain_from": d, "url_from": f"https://{d}/", "url_to": url, "first_seen": f"{day} 08:00:00 +00:00",  # noqa: E731
-                                "domain_from_rank": 40}
-    pages = {"": ([item("janemaker.com", "https://janemaker.gumroad.com/l/toxins", "2019-03-02"),
-                   item("spam-network-demo.com", "https://spamseller.gumroad.com/", "2019-04-01")], "t1"),
-             "t1": ([item("nocode.school", "https://nocode.gumroad.com/l/course", "2024-05-06")], "")}
-    sent = []
-
-    def call(calls):
-        body = calls[0]["arguments"]["body"][0]
-        sent.append(body)
-        assert body["order_by"] == ["first_seen,asc"] and body["mode"] == "one_per_domain"
-        return _history_page(*pages[body.get("search_after_token", "")]), 60000
-    monkeypatch.setattr(seller_history.aisa, "call", call)
-    db = seller_history.connect(tmp_path)
-    first = seller_history.pull(db, ["gumroad"], 50000)                        # the budget runs out after one page
-    assert first["platforms"]["gumroad"] == {"rows": 2, "done": False, "cost_micros": 60000, "spent_micros": 60000, "error": ""}
-    rest = seller_history.pull(db, ["gumroad"], 1_000_000)
-    assert sent[-1]["search_after_token"] == "t1" and rest["platforms"]["gumroad"]["done"]   # it went on from the saved token
-    assert seller_history.pull(db, ["gumroad"], 1_000_000)["cost_micros"] == 0               # done: nothing more to buy
-    got = {h: (day, pays) for h, day, pays in db.execute("SELECT host, first_seen, pays FROM sites")}
-    assert got == {"janemaker.com": ("2019-03-02", 1), "spam-network-demo.com": ("2019-04-01", 0), "nocode.school": ("2024-05-06", 1)}
 
 
 
-def test_history_update_adds_the_new_sellers_back_to_the_newest_day(tmp_path, monkeypatch):
-    monkeypatch.setattr(seller_history, "PAGE", 2)
-    item = lambda d, url, day: {"domain_from": d, "url_from": f"https://{d}/", "url_to": url, "first_seen": f"{day} 08:00:00 +00:00",  # noqa: E731
-                                "domain_from_rank": 40}
-    db = seller_history.connect(tmp_path)
-    db.executemany("INSERT INTO sites (platform, host, first_seen, page, link, rank, pays) VALUES (?, ?, ?, '', '', 0, 1)",
-                   [("polar", "old.app", "2026-10-10"), ("stripe", "moveddemo.app", "2025-01-01")])
-    pages = {"": ([item("new.app", "https://buy.polar.sh/polar_cl_1", "2026-10-14"),
-                   item("old.app", "https://buy.polar.sh/polar_cl_2", "2026-10-13")], "t1"),     # an old seller's new page
-             "t1": ([item("moveddemo.app", "https://buy.polar.sh/polar_cl_3", "2026-10-12"),
-                     item("older.app", "https://buy.polar.sh/polar_cl_4", "2026-10-02")], "t2"),   # past 10-07: the last page read
-             "t2": ([item("never.app", "https://buy.polar.sh/polar_cl_5", "2026-09-01")], "")}
-    sent = []
-
-    def call(calls):
-        body = calls[0]["arguments"]["body"][0]
-        sent.append(body.get("search_after_token", ""))
-        assert body["order_by"] == ["first_seen,desc"]
-        return _history_page(*pages[body.get("search_after_token", "")]), 60000
-    monkeypatch.setattr(seller_history.aisa, "call", call)
-    got = seller_history.update(db, ["polar"], 1_000_000, date(2026, 10, 15))["platforms"]["polar"]
-    assert sent == ["", "t1"] and got["since"] == "2026-10-07"
-    assert got["new"] == 3 and got["paying"] == 3 and got["elsewhere"] == 1 and got["cost_micros"] == 120000   # moveddemo.app sold via Stripe
-    hosts = {h for (h,) in db.execute("SELECT host FROM sites WHERE platform = 'polar'")}
-    assert hosts == {"old.app", "new.app", "moveddemo.app", "older.app"}
-    assert db.execute("SELECT day, new, elsewhere FROM updates").fetchall() == [("2026-10-15", 3, 1)]
-
-def test_history_stops_on_a_refused_page(tmp_path, monkeypatch):
-    refused = {"h": {"tasks": [{"status_code": 40501, "status_message": "Invalid Field: 'search_after_token'."}]}}
-    monkeypatch.setattr(seller_history.aisa, "call", lambda calls: (refused, 0))
-    db = seller_history.connect(tmp_path)
-    got = seller_history.pull(db, ["polar"], 1_000_000)["platforms"]["polar"]
-    assert not got["done"] and "Invalid Field" in got["error"]
 
 
-def test_history_reads_sorts_and_counts(tmp_path, monkeypatch):
-    db = seller_history.connect(tmp_path)
-    db.executemany("INSERT INTO sites (platform, host, first_seen, page, link, rank, pays) VALUES (?, ?, ?, '', '', 0, ?)",
-                   [("stripe", "captions-demo.app", "2025-02-03", 1), ("polar", "captions-demo.app", "2025-03-01", 1),
-                    ("stripe", "gone.example", "2021-07-01", 1), ("gumroad", "spam-network-demo.com", "2019-04-01", 0)])
-    monkeypatch.setattr(seller_history.sellers, "page_words",
-                        lambda host, limit: ("NotchLive — Live Captions for Mac", "") if host == "captions-demo.app" else ("", ""))
-    assert seller_history.read(db, 2) == {"step": "read", "read": 2, "answered": 1}            # spam-network-demo.com is no seller: not read
-    monkeypatch.setattr(seller_history.sellers.aisa, "chat", lambda model, system, user, max_tokens=1500: '[{"i": 0, "kind": "ai"}]')
-    sorted_ = seller_history.sort(db, "gpt-4.1-mini", 1_000_000)
-    assert sorted_["sorted"] == 1 and sorted_["by_rules"] == 0                                 # the dead site is left unsorted
-    out = tmp_path / "sellers.csv"
-    s = seller_history.summary(db, out)
-    assert ["2025", "ai", 2] in s["by_year_kind"] and ["2021", "no answer", 1] in s["by_year_kind"]
-    assert ["2025-02", "stripe", 1] in s["by_month"] and out.read_text(encoding="utf-8-sig").count("captions-demo.app") == 2
-    assert "| Stripe | 2 | 2 |" in seller_history.text(s)
+
 
 
 def test_builder_defaults_are_not_the_sellers_words(tmp_path):
@@ -1472,18 +1217,6 @@ def test_page_words_reads_a_gzipped_head_cut_short(monkeypatch):
     assert sellers.page_words("captions-demo.app", 400) == ("NotchLive — Live Captions", "Captions for your Mac")
 
 
-def test_history_sorts_by_rules_for_free_and_the_model_redoes_them(tmp_path, monkeypatch):
-    db = seller_history.connect(tmp_path)
-    db.executemany("INSERT INTO sites (platform, host, first_seen, page, link, rank, pays, title, description, read_on) "
-                   "VALUES ('stripe', ?, '2026-01-02', '', '', 0, 1, ?, '', '2026-10-14')",
-                   [("captions-demo.app", "NotchLive — Live Captions for Mac"), ("themes-demo.com", "Astro Themes & Tailwind CSS Templates")])
-    free = seller_history.sort(db, "", 0)                                            # no model: rules, whatever the budget
-    assert free["sorted"] == 2 and free["by_rules"] == 2 and free["cost_micros"] == 0
-    monkeypatch.setattr(seller_history.sellers.aisa, "chat",
-                        lambda model, system, user, max_tokens=1500: '[{"i": 0, "kind": "ai"}, {"i": 1, "kind": "template"}]')
-    paid = seller_history.sort(db, "gpt-4.1-mini", 1_000_000)
-    assert paid["sorted"] == 2 and paid["by_rules"] == 0
-    assert dict(db.execute("SELECT host, kind_by FROM sites")) == {"captions-demo.app": "model", "themes-demo.com": "model"}
 
 
 # --- 0.5 local: ⑨ feeds, ⑧ builders, ⑩ money, side evidence ------------------------------------
@@ -1508,8 +1241,9 @@ def test_feeds_take_a_snapshot_first_then_report_what_is_new(cfg, tmp_path, monk
             return json.dumps({"hits": [{"objectID": "9", "title": "Show HN: Quarry – SQL for spreadsheets", "points": 80}]}).encode()
         return pages[url].encode()
     monkeypatch.setattr(feeds, "get", get)
-    monkeypatch.setattr(feeds.aisa, "call", lambda calls: ({"tiktok": {"data": {"trending_search_words": [
-        {"trendingSearchWord": "AI yearbook filter"}, {"trendingSearchWord": "Mayor Arrested"}]}}}, 1000))
+    monkeypatch.setattr(feeds.monid, "run", lambda provider, endpoint, body=None, query=None: (
+        {"data": {"trending_search_words": [
+            {"trendingSearchWord": "AI yearbook filter"}, {"trendingSearchWord": "Mayor Arrested"}]}}, 1000))
     first = feeds.feeds(cfg, tmp_path, today=date(2026, 10, 14))
     assert set(first["first_run"]) == {"producthunt", "hn", "openrouter", "awesome", "trending"}
     # a first run lists what the source itself dates as recent; the undated awesome list and the undated PH entry wait
@@ -1525,56 +1259,44 @@ def test_feeds_take_a_snapshot_first_then_report_what_is_new(cfg, tmp_path, monk
 def test_weekly_feeds_wait_for_their_day(cfg, tmp_path, monkeypatch):
     cfg["feeds"]["enabled"], cfg["feeds"]["weekly"], cfg["feeds"]["weekday"] = ["rising"], ["rising"], 0
     asked = []
-    monkeypatch.setattr(feeds.goanyapi, "related_queries", lambda seed: (asked.append(seed) or {"rising": [f"{seed} free"]}, 6000))
+
+    def related_queries(terms, geo="US"):
+        asked.extend(terms)
+        return {t: {"rising": [f"{t} free"], "top": []} for t in terms}, 6000 * len(terms), []
+    monkeypatch.setattr(feeds.google, "related_queries", related_queries)
     assert feeds.feeds(cfg, tmp_path, today=date(2026, 10, 14))["read"] == {} and asked == []          # a Wednesday
     assert feeds.feeds(cfg, tmp_path, today=date(2026, 10, 14), weekly=True)["read"]["rising"] == len(cfg["feeds"]["seeds"])
 
 
 def test_money_finds_the_owners_other_sites_and_new_advertisers(cfg, tmp_path, monkeypatch):
     cfg["money"]["ad_terms"] = ["ai headshot"]
-    monkeypatch.setattr(money.goanyapi, "key", lambda: "k")
+    monkeypatch.setattr(money.monid, "key", lambda: "k")
 
-    def call(path, **p):
-        if "domain" in p:
-            return {"publisherIds": {"direct": ["pub-42"] if p["domain"] == "tooldirdemo.ai" else []}}, 3000
-        return {"domains": ["coloringdemo.ai", "lyricsdemo.io", "tooldirdemo.ai"]}, 3000
-    monkeypatch.setattr(money.goanyapi, "call", call)
-    ads = iter([(["Headshot Pro"], 4000), (["Headshot Pro", "Aragon AI"], 4000)])
-    monkeypatch.setattr(money.goanyapi, "advertisers", lambda term: next(ads))
+    def run(provider, endpoint, body=None, query=None):      # the Ads Transparency Center's answer
+        names = ["tooldirdemo.ai", "coloringdemo.ai", "lyricsdemo.io"]
+        return [{"items": [{"type": "ads_domain", "domain": d} for d in names]}], 3000
+    monkeypatch.setattr(money.monid, "run", run)
+    monkeypatch.setattr(money.adsense, "ids", lambda d: {"pub-42"} if d.endswith("demo.ai") or d.endswith("demo.io") else set())
+    ads = iter([["headshotpro.com"], ["headshotpro.com", "aragon.ai"]])
+
+    def serp(keyword, location_code=2840, language="en", device="desktop", depth=10):
+        return {"items": [{"type": "paid", "domain": n} for n in next(ads)], "results_count": 100}, 2000
+    monkeypatch.setattr(money.google, "serp", serp)
     first = money.money(cfg, tmp_path, ["tooldirdemo.ai", "photoroom.com"])
     assert first["portfolios"] == [{"site": "tooldirdemo.ai", "pub": "pub-42", "sisters": ["coloringdemo.ai", "lyricsdemo.io"]}]
     assert first["advertisers"] == [] and {x["term"] for x in first["terms"]} == {"coloringdemo", "lyricsdemo"}   # first look: no "new" ads
     again = money.money(cfg, tmp_path, ["tooldirdemo.ai"])
-    assert again["portfolios"] == [] and again["advertisers"] == [{"term": "ai headshot", "advertisers": ["Aragon AI"]}]
+    assert again["portfolios"] == [] and again["advertisers"] == [{"term": "ai headshot", "advertisers": ["aragon.ai"]}]
     text = "\n".join(report._money_lines(first))
     assert "tooldirdemo.ai (AdSense pub-42): coloringdemo.ai, lyricsdemo.io" in text
 
 
-def test_builders_keep_the_badge_and_leave_posts_about_the_tool(cfg, tmp_path, monkeypatch):
-    cfg["builders"]["platforms"] = ["lovable", "beehiiv"]
-    rows = {"lovable.dev": [("formdemo.app", "https://lovable.dev/projects/lovp_1", "Edit with"),
-                            ("blog.example", "https://lovable.dev/", "Lovable")],
-            "beehiiv.com": [("radar.newsletter-demo.com", "https://www.beehiiv.com/powered-by?publication_name=Radar", "Powered by beehiiv")]}
-
-    def call(calls):
-        target = calls[0]["arguments"]["body"][0]["target"]
-        if calls[0]["tool"] == sellers.DOMAINS:
-            return _sites([d for d, _, _ in rows[target]]), 27600
-        return {"b": {"tasks": [{"result": [{"items": [{"domain_from": d, "url_to": u, "anchor": a, "url_from": f"https://{d}/deep/page",
-                                                         "first_seen": "2026-10-14 03:00:00 +00:00", "domain_from_rank": 5}
-                                                        for d, u, a in rows[target]]}]}]}}, 27600
-    monkeypatch.setattr(sellers.aisa, "call", call)
-    monkeypatch.setattr(sellers, "page_words", lambda host: ("FormDemo — forms that fill themselves", "") if host == "formdemo.app"
-                        else ("Radar", "A weekly letter on climate startups"))
-    got = sellers.builders(cfg, tmp_path)
-    assert {s["host"] for s in got["sites"]} == {"formdemo.app", "radar.newsletter-demo.com"}      # the post about Lovable is out
-    assert "| [formdemo.app](https://formdemo.app/) | Lovable |" in "\n".join(report._builder_lines(got))
 
 
 def test_seller_traffic_details_come_from_the_visits_answer():
-    info = sellers.traffic_info({"EstimatedMonthlyVisits": {"2026-08-01": 10, "2026-09-01": 924}, "DateData": {"registration": "2026-08-07T11:54Z"},
-                                 "TrafficSources": {"Direct": 0.36, "Search": 0.32, "SearchPaid": 0.01, "GenAI": 0.02}})
-    assert info == {"visits": 924, "registered": "2026-08-07", "top_source": "direct", "ai_share": 0.02}
+    info = sellers.traffic_info({"monthlyVisits": 924,
+                                 "trafficSources": {"direct": 0.36, "searchOrganic": 0.32, "searchPaid": 0.01, "genAi": 0.02}})
+    assert info == {"visits": 924, "top_source": "direct", "ai_share": 0.02}
 
 
 def test_side_evidence_reads_certificates_wikipedia_and_google(monkeypatch):
@@ -1605,40 +1327,6 @@ def test_tails_size_the_searches_around_paying_products(monkeypatch):
     assert got["rows"] == [{"phrase": "photoroom alternative", "volume": 1900}] and got["cost_micros"] == 90000
 
 
-def test_asks_also_read_x_software_recommendations_and_freelancer(monkeypatch):
-    import gzip
-    import io
-    c = {"x_query": '"is there a tool"', "x_min_likes": 10, "stack_all": ["softwarerecs"], "stack_sites": ["superuser"],
-         "stack_titles": ["automate"], "freelancer_queries": ["automate"], "min_score": 2}
-    monkeypatch.setattr(asks.aisa, "call", lambda calls: ({"x": {"tweets": [
-        {"id": "1", "text": "is there a tool that turns slides into notes?", "likeCount": 44, "url": "u"}]}}, 3000))
-    stack = {"softwarerecs": {"items": [{"question_id": 7, "title": "Open-source tool to auto-generate API regression tests", "score": 0, "link": "l"}]},
-             "superuser": {"items": [{"question_id": 8, "title": "Automate renaming 500 PDFs &amp; folders", "score": 3, "link": "m"}]}}
-    jobs = {"result": {"projects": [{"id": 40767538, "title": "Claude AI & Canva Graphic Automation Expert Needed", "seo_url": "canva/x",
-                                     "bid_stats": {"bid_count": 124}, "budget": {"minimum": 20.0, "maximum": 250.0},
-                                     "currency": {"exchange_rate": 1.31512}, "preview_description": "Build an AI graphic system"}]}}
-
-    class Res(io.BytesIO):
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            return False
-
-    def urlopen(req, timeout):
-        url = req.full_url
-        if "freelancer.com" in url:
-            return Res(json.dumps(jobs).encode())
-        site = "softwarerecs" if "softwarerecs" in url else "superuser"
-        return Res(gzip.compress(json.dumps(stack[site]).encode()))
-    monkeypatch.setattr(asks.urllib.request, "urlopen", urlopen)
-    x, _ = asks.x_posts(c)
-    se, _ = asks.stack_questions(c)
-    fl, _ = asks.freelancer_jobs(c)
-    assert x[0]["subreddit"] == "x" and x[0]["score"] == 44
-    assert [q["title"] for q in se] == ["Open-source tool to auto-generate API regression tests", "Automate renaming 500 PDFs & folders"]
-    assert se[0]["score"] == 2                       # every Software Recommendations question is a request, votes or not
-    assert fl[0]["score"] == 124 and fl[0]["budget_usd"] == 329 and fl[0]["url"] == "https://www.freelancer.com/projects/canva/x"
 
 
 def test_a_name_that_belongs_to_something_else_is_taken(monkeypatch):
@@ -1665,22 +1353,13 @@ def test_dodo_and_waffo_links_take_money():
     assert waffo("checkout.waffo.ai", "/acme/pro-plan") and not waffo("checkout.waffo.ai", "/")
 
 
-def test_side_evidence_asks_whois_for_the_first_names(monkeypatch):
-    asked = []
-    monkeypatch.setattr(sidelights.aisa, "rest", lambda path, task: (asked.append(task["filters"][0][2]) or
-                        {"total_count": 4, "items": [{"domain": "nanobanana-demo.app"}, {"domain": "nano-banana-demo.ai"}]}, 121200))
-    monkeypatch.setattr(sidelights, "_get", lambda url: b"[]" if "crt.sh" in url else (_ for _ in ()).throw(OSError("offline")))
-    got = sidelights.evidence({"names": 2, "whois_names": 1, "whois_days": 30}, ["nano banana", "seedream five"], today=date(2026, 10, 15))
-    assert asked == ["%nanobanana%"] and got["cost_micros"] == 121200
-    assert got["rows"][0]["sites"] == (4, ["nanobanana-demo.app", "nano-banana-demo.ai"]) and got["rows"][0]["sites_from"] == "whois"
-    assert got["rows"][1]["sites"] == (0, []) and "sites_from" not in got["rows"][1]           # crt.sh for the rest
-    assert "4 (nanobanana-demo.app, nano-banana-demo.ai) · whois" in "\n".join(report._side_lines(got))
 
 
 def test_rising_words_must_share_the_seed(cfg, tmp_path, monkeypatch):
     cfg["feeds"]["enabled"], cfg["feeds"]["weekly"], cfg["feeds"]["seeds"] = ["rising"], [], ["ai generator"]
-    monkeypatch.setattr(feeds.goanyapi, "related_queries", lambda seed: (
-        {"rising": ["hotel lobby ai generator", "best pizza near me", "ai rap video generator", "how to bake a cake"]}, 6000))
+    monkeypatch.setattr(feeds.google, "related_queries", lambda terms, geo="US": (
+        {t: {"rising": ["hotel lobby ai generator", "best pizza near me", "ai rap video generator", "how to bake a cake"],
+             "top": []} for t in terms}, 6000 * len(terms), []))
     got = feeds.feeds(cfg, tmp_path, today=date(2026, 10, 15))
     assert [x["term"] for x in got["terms"]] == ["hotel lobby ai generator", "ai rap video generator"]
 
@@ -1698,22 +1377,6 @@ def test_asks_drop_old_posts_and_name_their_source(cfg, monkeypatch):
     assert asks.x_time("Fri Jul 17 19:56:23 +0000 2026") > 0 and asks.x_time("") == 0.0
 
 
-def test_only_software_built_with_a_builder_becomes_a_lead(cfg, tmp_path, monkeypatch):
-    cfg["builders"]["platforms"] = ["lovable"]
-    rows = [("formdemo.app", "Edit with"), ("pizzademo.it", "Edit with")]
-
-    def call(calls):
-        if calls[0]["tool"] == sellers.DOMAINS:
-            return _sites([d for d, _ in rows]), 27600
-        return {"b": {"tasks": [{"result": [{"items": [{"domain_from": d, "url_to": "https://lovable.dev/projects/x", "anchor": a,
-                                                         "url_from": f"https://{d}/", "first_seen": "2026-10-15 03:00:00 +00:00",
-                                                         "domain_from_rank": 5} for d, a in rows]}]}]}}, 27600
-    monkeypatch.setattr(sellers.aisa, "call", call)
-    monkeypatch.setattr(sellers, "page_words", lambda host: ("FormDemo — forms that fill themselves with AI", "") if host == "formdemo.app"
-                        else ("Pizzeria Demo — Pizza napoletana a Roma", ""))
-    got = sellers.builders(cfg, tmp_path)
-    assert [x["term"] for x in got["terms"]] == ["formdemo"] and {s["host"] for s in got["sites"]} == {"formdemo.app", "pizzademo.it"}
-    assert got["by_kind"]["ai"] == 1
 
 
 def test_the_status_says_which_signals_were_slow():
@@ -1735,23 +1398,50 @@ def test_money_asks_about_page_one_tools_and_whois_follows_searches():
     assert cli.by_searches(["digup", "qwen21 nsfw pose skill", "wordcraft"], uc) == ["wordcraft", "digup", "qwen21 nsfw pose skill"]
 
 
-def test_a_payment_link_on_several_new_sites_is_a_network(cfg, tmp_path, monkeypatch):
-    cfg["sellers"]["platforms"] = ["stripe"]
-    rows = [("dachecker-demo.shop", "https://buy.stripe.com/9B6a"), ("dachecker-demo2.space", "https://buy.stripe.com/9B6a"),
-            ("formdemo.app", "https://buy.stripe.com/own1")]
-
-    def call(calls):
-        if calls[0]["tool"] == sellers.DOMAINS:
-            return _sites([d for d, _ in rows]), 27600
-        return _backlinks(rows), 27600
-    monkeypatch.setattr(sellers.aisa, "call", call)
-    got = sellers.fresh(cfg["sellers"], {})
-    assert set(got["found"]) == {"formdemo.app"} and got["networked"] == 2
 
 
 def test_an_adsense_id_on_dozens_of_sites_is_a_network():
     assert money.is_network([f"site{i}.com" for i in range(31)], {"max_sisters": 30})
     assert not money.is_network(["video-demo.online", "photo-demo.online", "logo-demo.io"], {"max_sisters": 30})
+
+
+def test_the_stores_own_search_names_the_extensions(monkeypatch):
+    page = ('<a href="./detail/ai-headshot-generator/abcdefghijklmnopabcdefghijklmnop">one</a>'
+            '<a href="./detail/ai-headshots/bcdefghijklmnopabcdefghijklmnopa">two</a>'
+            '<a href="./detail/ai-headshots/bcdefghijklmnopabcdefghijklmnopa">the same one</a>')
+    monkeypatch.setattr(cws, "_get", lambda url: page)
+    assert cws.search("ai headshot") == ["abcdefghijklmnopabcdefghijklmnop", "bcdefghijklmnopabcdefghijklmnopa"]
+
+
+def test_the_discord_servers_are_counted_in_the_boards_own_answer():
+    body = ('<a href="/server/1490104640056987771">one</a><a href="/en/server/1490104640056987771">one again</a>'
+            '<a href="/server/1490104640056987772">two</a><a href="/servers/tag/ai">a list</a>')
+    assert sidelights.count_servers(body) == 2
+
+
+def test_the_ad_transparency_center_is_asked_for_the_name_and_the_domain(monkeypatch):
+    assert domains.name_of("vogue.com") == "vogue" and domains.name_of("www.vogue.com") == "vogue"
+    assert domains.name_of("ai-tools.co.uk") == "ai-tools" and domains.name_of("theverge.com") == "theverge"
+    assert domains.name_of("vogue.com.tw") == "vogue" and domains.name_of("blog.shopify.com") == "shopify"
+
+    asked = []
+
+    def run(provider, endpoint, body=None, query=None):
+        asked.append(body["keyword"])
+        return [{"items": [{"type": "ads_domain", "domain": d} for d in
+                            (["vogue.ph", "vogue.it"] if body["keyword"] == "vogue" else ["vogue.com.tw"])]}], 2400
+    monkeypatch.setattr(money.monid, "run", run)
+    monkeypatch.setattr(money.adsense, "ids", lambda d: {"pub-7"} if d.startswith("vogue") else set())
+    pub, others, pool, cost = money.sisters("vogue.com")
+    assert sorted(asked) == ["vogue", "vogue.com"]           # the name brings the family, the domain the near-misses
+    assert pub == "pub-7" and others == ["vogue.ph", "vogue.it", "vogue.com.tw"]
+    assert pool == 3 and cost == 4800                        # the site itself is not in the pool
+
+
+def test_the_publisher_id_with_the_most_sites_wins(monkeypatch):
+    monkeypatch.setattr(adsense, "ids", lambda d: {"pub-a"} if d.startswith("vogue.ph") else
+                        ({"pub-b"} if d.startswith("vogue") else set()))
+    assert adsense.shared("vogue.com", ["vogue.it", "vogue.de", "vogue.ph"]) == ("pub-b", ["vogue.it", "vogue.de"])
 
 
 # --- 0.6: word age, markets, page-one shape ------------------------------------------------------
@@ -1760,45 +1450,27 @@ from radar import markets, serpshape, wordage  # noqa: E402
 
 
 def _weeks(values, end=TODAY):
-    """A weekly Trends task ending with the week still running (its period ends today), as DataForSEO returns it."""
+    """A weekly Trends result ending with the week still running (its period ends today), as DataForSEO answers it."""
     starts = [end - timedelta(days=7 * (len(values) - 1 - i)) for i in range(len(values))]
     data = [{"date_from": s.isoformat(), "date_to": min(s + timedelta(days=6), end).isoformat(), "values": [v]} for s, v in zip(starts, values)]
-    return {"result": [{"items": [{"type": "dataforseo_trends_graph", "data": data}]}]}
+    return {"items": [{"type": "google_trends_graph", "data": data}]}
 
 
-def test_first_seen_is_the_first_week_with_interest():
-    age = wordage.first_seen(wordage.series(_weeks([0] * 250 + [3, 20, 60, 100, 80, 70, 90])), TODAY)
-    assert age["first_seen"] == (TODAY - timedelta(days=42)).isoformat() and age["is_new"] and not age["since_start"]
-    old = wordage.first_seen(wordage.series(_weeks([0] * 200 + [5] + [0] * 56)), TODAY)
-    assert old["first_seen"] == (TODAY - timedelta(days=56 * 7)).isoformat() and not old["is_new"]
-    always = wordage.first_seen(wordage.series(_weeks([12] * 257)), TODAY)
-    assert always["since_start"] and not always["is_new"]
 
 
 def test_first_seen_ignores_the_unsettled_tail():
     # the week still running reads 100 for a term nobody searched: not a new word, no data at all
     assert wordage.first_seen(wordage.series(_weeks([0] * 256 + [100])), TODAY)["no_data"]
     # daily data: Google's "0, 100" on the last two days
-    task = {"result": [{"items": [{"type": "dataforseo_trends_graph", "data": [
-        {"date_from": d.isoformat(), "date_to": d.isoformat(), "values": [v]} for d, v in _daily([0] * 88 + [0, 100], end=TODAY - timedelta(days=1))]}]}]}
+    task = {"items": [{"type": "google_trends_graph", "data": [
+        {"date_from": d.isoformat(), "date_to": d.isoformat(), "values": [v]} for d, v in _daily([0] * 88 + [0, 100], end=TODAY - timedelta(days=1))]}]}
     assert wordage.first_seen(wordage.series(task), TODAY)["no_data"]
     # a period flagged missing_data is not read either
     task = _weeks([0] * 255 + [40, 0])
-    task["result"][0]["items"][0]["data"][-2]["missing_data"] = True
+    task["items"][0]["data"][-2]["missing_data"] = True
     assert wordage.first_seen(wordage.series(task), TODAY)["no_data"]
 
 
-def test_word_age_reads_the_acted_on_rows(cfg, monkeypatch):
-    cfg["word_age"]["enabled"] = True
-    asked = []
-
-    def call_all(calls):
-        asked.extend(c["arguments"]["body"][0] for c in calls)
-        return {c["call_id"]: {"tasks": [_weeks([0] * 250 + [9] * 7)]} for c in calls}, 1200 * len(calls)
-    monkeypatch.setattr(wordage.aisa, "call_all", call_all)
-    rows = [{"phrase": "pdfcraft"}, {"phrase": "ai image detector"}]
-    assert wordage.assess(rows, cfg, TODAY) == (2400, [])
-    assert all(r["is_new"] for r in rows) and asked[0] == {"keywords": ["pdfcraft"], "time_range": "past_5_years"}
 
 
 def test_best_market_divides_by_difficulty_only_when_every_market_has_one():
@@ -1810,33 +1482,6 @@ def test_best_market_divides_by_difficulty_only_when_every_market_has_one():
     assert markets.best_market({"US": {"volume": 400, "kd": 0}, "DE": {"volume": 300, "kd": 2}}) == "US"
 
 
-def test_markets_reuse_the_tables_own_volumes_and_buy_the_rest(cfg, monkeypatch):
-    cfg["markets"].update(enabled=True, codes=["US", "DE"], difficulty=True, top_region=True)
-    bought = []
-
-    def call(calls):
-        body = calls[0]["arguments"]["body"][0]
-        if calls[0]["tool"] == markets.VOLUME_TOOL:
-            bought.append((body["location_code"], body["keywords"]))
-            vol = {2840: {"pdfcraft": 8000}, 2276: {"pdfcraft": 2000, "ai image detector": 4000}}[body["location_code"]]
-            return {"vol": {"tasks": [{"result": [{"keyword": k, "search_volume": vol.get(k, 0)} for k in body["keywords"]]}]}}, 90000
-        kd = {"en": {"pdfcraft": 30, "ai image detector": 60}, "de": {"pdfcraft": 10, "ai image detector": 20}}[body["language_code"]]
-        return {"kd": {"tasks": [{"result": [{"items": [{"keyword": k, "keyword_properties": {"keyword_difficulty": kd[k]}}
-                                                        for k in body["keywords"]]}]}]}}, 12000
-    regions = {"result": [{"items": [{"type": "subregion_interests", "interests": [{"keyword": "x", "values": [   # as DataForSEO answers
-        {"geo_id": "US", "geo_name": "United States", "value": 40}, {"geo_id": "DE", "geo_name": "Germany", "value": 70},
-        {"geo_id": "SX", "geo_name": "Sint Maarten", "value": 100}]}]}]}]}       # a small place tops the share: left out
-    monkeypatch.setattr(markets.aisa, "call", call)
-    monkeypatch.setattr(markets.aisa, "call_all", lambda calls: ({c["call_id"]: {"tasks": [regions]} for c in calls}, 2400 * len(calls)))
-    rows = [{"phrase": "pdfcraft"}, {"phrase": "ai image detector"}]
-    cost, errors = markets.assess(rows, cfg, {2840: {"ai image detector": {"volume": 60000, "month": "2026-08"}}})
-    assert errors == [] and bought == [(2840, ["pdfcraft"]), (2276, ["pdfcraft", "ai image detector"])]
-    assert cost == 2 * 90000 + 2 * 12000 + 2 * 2400
-    pdf, det = rows
-    assert pdf["markets"]["by"] == {"US": {"volume": 8000, "kd": 30}, "DE": {"volume": 2000, "kd": 10}}
-    assert pdf["markets"]["best"] == "US" and det["markets"]["best"] == "US"   # 267 vs 200; 1000 vs 200
-    assert det["markets"]["top_region"] == {"id": "DE", "name": "Germany", "value": 70}
-    assert report._markets(pdf["markets"]) == "**best US** · US 8k/30 · DE 2k/10 · top Germany"
 
 
 def test_homepages_inner_pages_and_platforms_from_urls():
@@ -1876,29 +1521,6 @@ def test_serp_shape_verdicts():
     assert not serpshape.has_phrase("PDF Editors compared", "pdf editor")
 
 
-def test_a_new_term_reads_one_step_easier_on_page_one(cfg, tmp_path, monkeypatch):
-    assert competition.verdict(0, 55, new=True) == "mixed" and competition.verdict(1, 30, new=True) == "open"
-    assert competition.verdict(3, None, new=True) == "open" and competition.verdict(None, None, new=True) == "mixed"
-    cfg["competition"]["max_rows"] = 8
-    strong = [("canva.com", "https://canva.com/ai", "Canva AI"), ("adobe.com", "https://adobe.com/x", "Adobe")]
-
-    def call(calls):
-        c = calls[0]
-        if c["call_id"] == "serp":
-            return {"serp": _serp(strong)}, 2000
-        return {"kd": {"tasks": [{"result": [{"items": [{"keyword": k, "keyword_properties": {"keyword_difficulty": 60}}
-                                                        for k in c["arguments"]["body"][0]["keywords"]]}]}]}}, 12000
-    monkeypatch.setattr(competition.aisa, "call", call)
-    rows = [{"phrase": "old term", "decision": "prioritize"}, {"phrase": "new term", "decision": "prioritize", "is_new": True}]
-    competition.assess(rows, cfg, tmp_path)
-    old, new = rows
-    assert old["decision"] == "watch" and old["demoted"] and old["competition"]["verdict"] == "crowded"
-    assert new["decision"] == "prioritize" and new["competition"]["verdict"] == "mixed" and new["competition"]["eased"]
-    assert new["competition"]["results"][0]["url"] == "https://canva.com/ai"
-    # the SERP shape reuses the results the page-one check read: no second purchase
-    cfg["serp_shape"]["enabled"] = True
-    monkeypatch.setattr(competition.aisa, "call", lambda calls: (_ for _ in ()).throw(AssertionError("bought twice")))
-    assert serpshape.assess([new], cfg) == (0, []) and new["serp"]["verdict"] == "beatable" and new["serp"]["inner"] == 2
 
 
 def test_keyword_table_shows_age_markets_and_shape_in_both_languages(cfg, tmp_path, monkeypatch):
@@ -1906,17 +1528,19 @@ def test_keyword_table_shows_age_markets_and_shape_in_both_languages(cfg, tmp_pa
         cfg[block]["enabled"] = True
     cfg["markets"].update(codes=["US", "DE"], difficulty=False, top_region=False)
     _fake_usecase_network(monkeypatch)
+    _fake_optional_readings(monkeypatch)
     page = _serp([("synthid-detector.example", "https://synthid-detector.example/", "Free AI image checker"),
                   ("medium.com", "https://medium.com/@a/synthid", "I tried it"), ("x.com", "https://x.com/blog/a", "News")])
 
-    def call(calls):
-        c = calls[0]
-        if c["tool"] == markets.VOLUME_TOOL:
-            return {"vol": {"tasks": [{"result": [{"keyword": k, "search_volume": 1500} for k in c["arguments"]["body"][0]["keywords"]]}]}}, 90000
-        return {"serp": page}, 2000
-    monkeypatch.setattr(usecases.aisa, "call", call)
-    monkeypatch.setattr(usecases.aisa, "call_all", lambda calls: (
-        {x["call_id"]: {"tasks": [_weeks([0] * 250 + [5] * 7)]} for x in calls}, 1200 * len(calls)))
+    def result(endpoint, body):
+        if endpoint == dfs.TRENDS:                      # the word's age: a term that started in August
+            return _weeks([0] * 250 + [5] * 7), 1200
+        return page, 2000                              # the first page
+
+    def rows(endpoint, body):
+        return [{"keyword": k, "search_volume": 1500} for k in body["keywords"]], 90000
+    monkeypatch.setattr(dfs, "result", result)
+    monkeypatch.setattr(dfs, "rows", rows)
     uc = usecases.run(cfg, tmp_path, ["synthid detector"], {}, TODAY)
     rows = {r["phrase"]: r for r in uc["rows"]}
     name = rows["synthid detector"]
@@ -1975,15 +1599,6 @@ def test_twelve_months_read_as_a_word():
     assert report._year(spike).endswith("2026-01 冲高,现在 -90%")
 
 
-def test_volumes_carry_twelve_months_oldest_first(monkeypatch):
-    newest_first = [{"year": 2026, "month": m, "search_volume": 100 * m} for m in range(8, 0, -1)] + \
-                   [{"year": 2025, "month": m, "search_volume": None} for m in range(12, 8, -1)]
-    monkeypatch.setattr(usecases.aisa, "call", lambda calls: ({"vol": {"tasks": [{"result": [
-        {"keyword": "pdf editor", "search_volume": 400, "monthly_searches": newest_first}]}]}}, 90000))
-    vol, cost = usecases.volumes(["pdf editor"], 2840)
-    got = vol["pdf editor"]
-    assert cost == 90000 and got["volume"] == 400 and got["month"] == "2026-08"
-    assert got["months"][0] == ["2025-09", 0] and got["months"][-1] == ["2026-08", 800] and len(got["months"]) == 12
 
 
 def test_your_domains_come_from_the_config_or_the_search_console_property(cfg):
@@ -2041,31 +1656,6 @@ def test_search_console_positions_ask_once_for_the_exact_queries(cfg, monkeypatc
     assert seen["days"] == 28 and seen["dimensions"] == ["query", "page"] and seen["site"] == "sc-domain:mysite.com"
 
 
-def test_page_one_keeps_forum_threads_and_marks_what_takes_clicks(cfg, tmp_path, monkeypatch):
-    cfg["competition"]["max_rows"] = 8
-    items = [{"type": "ai_overview"}, {"type": "people_also_ask"},
-             {"type": "organic", "domain": "www.reddit.com", "url": "https://www.reddit.com/r/x/1", "title": "Best PDF editor?", "rank_group": 1},
-             {"type": "organic", "domain": "tool.com", "url": "https://tool.com/", "title": "Tool", "rank_group": 2},
-             {"type": "discussions_and_forums", "items": [
-                 {"url": "https://www.reddit.com/r/x/1", "title": "Best PDF editor?", "domain": "www.reddit.com"},     # the same thread
-                 {"url": "https://www.quora.com/q", "title": "Which PDF editor", "domain": "www.quora.com"}, {"title": "no url"}]}]
-
-    def call(calls):
-        if calls[0]["call_id"] == "serp":
-            return {"serp": {"tasks": [{"result": [{"items": items}]}]}}, 2000
-        return {"kd": {"tasks": [{"result": [{"items": []}]}]}}, 12000
-    monkeypatch.setattr(competition.aisa, "call", call)
-    rows = [{"phrase": "pdf editor", "decision": "watch"}, {"phrase": "best pdf editor", "decision": "watch"}]
-    competition.assess(rows, cfg, tmp_path)
-    comp = rows[0]["competition"]
-    assert [f["url"] for f in comp["forums"]] == ["https://www.reddit.com/r/x/1", "https://www.quora.com/q"]
-    assert comp["features"] == ["ai_overview", "discussions_and_forums", "people_also_ask"]
-    assert report._page_one(comp).endswith("· AI overview · forums")
-    lines = "\n".join(report._thread_lines(rows))
-    assert "half as often" in lines and "Pew Research Center" in lines
-    first, second = [x for x in lines.splitlines() if x.startswith("- **")]
-    assert first.startswith("- **best pdf editor** (a best-of search") and "[Best PDF editor?](https://www.reddit.com/r/x/1)" in second
-    assert report._page_one({"verdict": "open", "features": ["video", "featured_snippet"]}) == "open · answer box · videos"
 
 
 def test_dot_com_asks_the_registry(cfg, monkeypatch):
@@ -2089,9 +1679,10 @@ def test_dot_com_asks_the_registry(cfg, monkeypatch):
     assert dotcom.assess(rows, cfg) == (0, [])
 
 
-CHATGPT = {"brand_entities": [{"title": "AI assistant", "markdown": "ChatGPT"}, {"title": "Quizlet", "markdown": "**Quizlet**"},
-                              {"title": "Quizlet", "markdown": "Quizlet"}],
-           "sources": [{"domain": "www.quizlet.com"}, {"domain": "app.mysite.com"}, {"domain": None}]}
+CHATGPT = {"items": [{"sections": [
+    {"text": "Sure:\n\n1. **ChatGPT** : the assistant itself.\n2. **Quizlet** : flashcards.\n",
+     "items": [{"domain": "www.quizlet.com"}, {"domain": "app.mysite.com"}, {"domain": None}]}]}],
+           "search_results": [{"domain": None}]}
 AI_MODE = {"items": [{"type": "ai_overview", "references": [{"source": "NoteGPT", "domain": "notegpt.io"}],
                       "markdown": "Yes, several tools do.[[1]](https://notegpt.io/a)\n\nOptions:\n\n"
                                   "- **[NoteGPT AI PPT Summarizer](https://notegpt.io/ppt-summary)** : extracts text.\n"
@@ -2106,16 +1697,19 @@ def test_ai_answers_name_tools_and_cite_sites(cfg, monkeypatch):
     assert ai_answers.assess(rows, cfg) == (0, []) and "ai" not in rows[0]                      # off by default: nothing bought
     cfg["ai_answers"].update(enabled=True, engines=["chatgpt", "google", "bing"], max_rows=1)
     cfg["yours"]["domains"] = ["mysite.com"]
-    asked = []
+    asked = {}
 
-    def rest(path, task):
-        asked.append((path, task))
-        return (CHATGPT if "chat_gpt" in path else AI_MODE), 4000
-    monkeypatch.setattr(ai_answers.aisa, "rest", rest)
+    def result(endpoint, body):
+        asked[endpoint] = body
+        return (CHATGPT if endpoint == dfs.CHATGPT else AI_MODE), 4000
+    monkeypatch.setattr(dfs, "result", result)
     cost, errors = ai_answers.assess(rows, cfg)
     assert cost == 8000 and errors == ["unknown engine: bing"] and "ai" not in rows[1]
-    assert sorted(p for p, _ in asked) == sorted(ai_answers.PATHS.values())
-    assert asked[0][1] == {"keyword": "What is the best tool to convert slides to notes?", "location_code": 2840, "language_code": "en"}
+    assert set(asked) == set(ai_answers.PATHS.values())
+    assert asked[dfs.CHATGPT] == {"model_name": "gpt-4o-mini", "user_prompt": "What is the best tool to convert slides to notes?",
+                                  "max_output_tokens": 300, "web_search": True}
+    assert asked[dfs.AI_MODE] == {"keyword": "What is the best tool to convert slides to notes?", "location_code": 2840,
+                                  "language_code": "en", "device": "desktop"}
     ai = rows[0]["ai"]
     assert ai["by"]["chatgpt"] == {"names": ["ChatGPT", "Quizlet"], "sites": ["quizlet.com", "app.mysite.com"]} and ai["yours"]
     assert ai["by"]["google"] == {"names": ["NoteGPT AI PPT Summarizer", "Knowt", "SlidesAI"], "sites": ["notegpt.io", "knowt.com"]}
@@ -2124,6 +1718,17 @@ def test_ai_answers_name_tools_and_cite_sites(cfg, monkeypatch):
     lines = "\n".join(report._ai_lines(rows, cfg))
     assert "- **convert slides to notes**: ChatGPT names ChatGPT, Quizlet; cites quizlet.com, app.mysite.com" in lines
     assert "Google AI Mode names NoteGPT AI PPT Summarizer, Knowt, SlidesAI; cites notegpt.io, knowt.com · ✅ cites your site" in lines
+
+
+def test_the_chatgpt_answer_is_read_however_it_arrives():
+    # the answer that comes through AIsa's passthrough lists the brands and the sources
+    old = {"brand_entities": [{"title": "AI assistant", "markdown": "ChatGPT"}, {"title": "Quizlet", "markdown": "**Quizlet**"}],
+           "sources": [{"domain": "www.quizlet.com"}, {"domain": None}]}
+    assert ai_answers.read_chatgpt(old) == {"names": ["ChatGPT", "Quizlet"], "sites": ["quizlet.com"]}
+    # the one that comes through Monid writes its answer in sections and cites its sources
+    new = {"items": [{"sections": [{"text": "1. **ChatGPT** : the assistant.\n2. **Quizlet** : cards.\n",
+                                    "items": [{"domain": "www.quizlet.com"}]}]}]}
+    assert ai_answers.read_chatgpt(new) == {"names": ["ChatGPT", "Quizlet"], "sites": ["quizlet.com"]}
 
 
 def test_ai_answers_show_in_the_asks_table(cfg, monkeypatch):
@@ -2143,19 +1748,23 @@ def test_keyword_table_shows_the_year_your_rank_threads_and_the_dot_com(cfg, tmp
     cfg["dot_com"]["enabled"] = True
     cfg["yours"]["domains"] = ["mysite.com"]
     _fake_usecase_network(monkeypatch)
+    _fake_optional_readings(monkeypatch)
     monkeypatch.setattr(usecases, "volumes", lambda phrases, loc: (
         {"ai image detector": {"volume": 60000, "month": "2026-08", "months": _months([100] * 6 + [120, 140, 160, 180, 200, 220])},
          "photoshop alternative": {"volume": 6000, "month": "2026-08", "months": _months([300] * 12)}}, 90000))
     pages = {"synthid detector": [("mysite.com", "https://mysite.com/synthid", "SynthID detector"), ("reddit.com", "https://reddit.com/r/a/1", "Is SynthID real?")],
              "ai image detector": [("big.com", "https://big.com/ai", "AI image detector")]}
 
-    def call(calls):
-        c = calls[0]
-        if c["call_id"] == "serp":
-            return {"serp": _serp(pages[c["arguments"]["body"][0]["keyword"]])}, 2000
-        return {"kd": {"tasks": [{"result": [{"items": [{"keyword": k, "keyword_properties": {"keyword_difficulty": 25}}
-                                                        for k in c["arguments"]["body"][0]["keywords"]]}]}]}}, 12000
-    monkeypatch.setattr(usecases.aisa, "call", call)
+    def result(endpoint, body):
+        keyword = body.get("keyword") or ""
+        if keyword.startswith("intitle:"):        # how many pages already carry the term in the title
+            return {"items": [], "se_results_count": 19500}, 2000
+        return _serp(pages[keyword]), 2000
+
+    def rows(endpoint, body):
+        return [{"keyword": k, "keyword_properties": {"keyword_difficulty": 25}} for k in body["keywords"]], 12000
+    monkeypatch.setattr(dfs, "result", result)
+    monkeypatch.setattr(dfs, "rows", rows)
     monkeypatch.setattr(dotcom, "_get", lambda url: (404, {}))
     uc = usecases.run(cfg, tmp_path, ["synthid detector"], {}, TODAY)
     rows = {r["phrase"]: r for r in uc["rows"]}

@@ -8,26 +8,26 @@ often missing for an English term outside English markets). `best` is the market
 most searches per point of difficulty when every market with searches has a difficulty,
 else the one with the most searches: a ratio and a raw count are not compared.
 
-With `top_region` on, one more Trends task per row (DataForSEO Trends' interest by region,
-worldwide, 12 months) names the country where the term is most popular, on Trends' own
-0-100 scale: a share of local searches, not a count. That share puts small places first
-(Sint Maarten and Finland topped "photocraft" and "ai image detector" on 2026-10-18), so the
-top region is chosen among the markets of LOCATIONS, `locations` and `codes` only.
+With `top_region` on, one more Trends task per row (DataForSEO Trends' map of the interest
+by country, worldwide, 12 months; five rows a call) names the country where the term is
+most popular, on Trends' own 0-100 scale: a share of local searches, not a count. That share
+puts small places first (Sint Maarten and Finland topped "photocraft" and "ai image
+detector" on 2026-10-18), so the top region is chosen among the markets of LOCATIONS,
+`locations` and `codes` only.
 
 The volumes are asked without a language, so they hold searches in every language a
 market's users set; the difficulty needs one and takes the market's main language.
 
-Costs seen in October 2026: $0.09 a volume call, about $0.012 a difficulty call, $0.0024
-a region task. With the defaults that is four volume calls (the US one only when a name is
-among the rows, which is nearly always) and four difficulty calls, $0.41 for two rows on
-2026-10-18, plus $0.0024 a row.
+Costs seen in October 2026: $0.09 a volume call, about $0.012 a difficulty call, $0.011
+a Trends map call (five rows a call, so about $0.0022 a row). With the defaults that is
+four volume calls (the US one only when a name is among the rows, which is nearly always)
+and four difficulty calls, $0.41 for two rows on 2026-10-18, plus $0.0022 a row.
 """
 from __future__ import annotations
 
-from . import aisa, competition
+from . import competition, dfs
 
-VOLUME_TOOL = "post_dataforseo_keywords_gads_search_volume_live"
-REGION_TOOL = "post_dataforseo_keywords_trends_subregion_interests_live"
+MAP_KEYWORDS = 5          # the Trends endpoint takes up to five keywords a call
 # Google Ads location codes and each market's main language (for the difficulty lookup)
 LOCATIONS = {"US": (2840, "en"), "GB": (2826, "en"), "CA": (2124, "en"), "AU": (2036, "en"), "IN": (2356, "en"),
              "DE": (2276, "de"), "FR": (2250, "fr"), "ES": (2724, "es"), "IT": (2380, "it"), "NL": (2528, "nl"),
@@ -53,24 +53,48 @@ def best_market(by: dict[str, dict]) -> str | None:
 
 def volumes(phrases: list[str], loc: int) -> tuple[dict[str, int], int]:
     """{phrase: monthly searches} in one market, every language."""
-    data, cost = aisa.call([{"call_id": "vol", "tool": VOLUME_TOOL, "arguments": {"body": [{"keywords": phrases, "location_code": loc}]}}])
-    found = ((data.get("vol") or {}).get("tasks") or [{}])[0].get("result") or []
-    return {r["keyword"]: int(r.get("search_volume") or 0) for r in found if r.get("keyword")}, cost
+    rows, cost = dfs.rows(dfs.VOLUME, {"keywords": phrases, "location_code": loc})
+    return {r["keyword"]: int(r.get("search_volume") or 0) for r in rows if r.get("keyword")}, cost
 
 
 def top_region(task: dict, pool: set[str] | None = None) -> dict | None:
-    """{"id", "name", "value"} of the region with the highest interest in one region task,
-    among the region codes in `pool` when given."""
-    items = ((task.get("result") or [{}])[0] or {}).get("items") or []
-    # {"type": "subregion_interests", "interests": [{"keyword", "values": [{"geo_id", "geo_name", "value"}]}]}
-    regions = [g for i in items for k in (i.get("interests") or []) if isinstance(k, dict)
-               for g in (k.get("values") or []) if isinstance(g, dict)]
-    scored = [(int(g.get("value") or 0), g) for g in regions]
+    """{"id", "name", "value"} of the region with the highest interest in one Trends map,
+    among the region codes in `pool` when given.
+
+    The map's rows: {"geo_id", "geo_name", "values": [the interest of each keyword]}.
+    """
+    regions = [g for g in (task.get("data") or []) if isinstance(g, dict)]
+    scored = [(int((g.get("values") or [0])[0] or 0), g) for g in regions]
     scored = [(v, d) for v, d in scored if v > 0 and (pool is None or str(d.get("geo_id") or "").upper() in pool)]
     if not scored:
         return None
     v, d = max(scored, key=lambda x: x[0])
-    return {"id": d.get("geo_id") or d.get("location_code"), "name": d.get("geo_name") or d.get("location_name") or "?", "value": v}
+    return {"id": d.get("geo_id"), "name": d.get("geo_name") or "?", "value": v}
+
+
+def _maps(result: dict) -> dict[str, dict]:
+    """{keyword: the map of that keyword alone}, from the Trends answer.
+
+    One call with several keywords answers with a map for the group and a map for each
+    keyword on its own. The single one is the one to read: its values are that keyword's
+    own scale, the group's are shared with the other keywords of the call.
+    """
+    out: dict[str, dict] = {}
+    for item in result.get("items") or []:
+        if "map" not in str(item.get("type", "")):
+            continue
+        names = list(item.get("keywords") or [])
+        for index, name in enumerate(names):
+            if name not in out or len(names) == 1:
+                out[name] = _one(item, index)
+    return out
+
+
+def _one(item: dict, index: int) -> dict:
+    """The map of one keyword: every row carries that keyword's own value."""
+    return {"data": [{"geo_id": g.get("geo_id"), "geo_name": g.get("geo_name"),
+                      "values": (g.get("values") or [None])[index:index + 1] or [None]}
+                     for g in item.get("data") or []]}
 
 
 def _volumes(rows: list[dict], codes: list[str], extra: dict, known: dict[int, dict]) -> tuple[dict, int, list[str]]:
@@ -86,7 +110,7 @@ def _volumes(rows: list[dict], codes: list[str], extra: dict, known: dict[int, d
         try:
             got, spent = volumes(missing, loc[0]) if missing else ({}, 0)
             by[code], cost = {**have, **got}, cost + spent
-        except aisa.AisaError as exc:
+        except dfs.DfsError as exc:
             errors.append(f"volume {code}: {exc}")
     return by, cost, errors
 
@@ -100,20 +124,33 @@ def _difficulty(rows: list[dict], codes: list[str], extra: dict) -> tuple[dict, 
         try:
             by[code], spent = competition.difficulty([r["phrase"] for r in rows], *loc)
             cost += spent
-        except aisa.AisaError as exc:
+        except dfs.DfsError as exc:
             errors.append(f"difficulty {code}: {exc}")
     return by, cost, errors
 
 
 def _regions(rows: list[dict], pool: set[str]) -> tuple[dict[str, dict | None], int, list[str]]:
-    calls = [{"call_id": f"g{i}", "tool": REGION_TOOL, "arguments": {"body": [{"keywords": [r["phrase"]], "time_range": "past_12_months"}]}}
-             for i, r in enumerate(rows)]
-    try:
-        data, cost = aisa.call_all(calls)
-    except aisa.AisaError as exc:
-        return {}, 0, [f"top region: {exc}"]
-    return {r["phrase"]: top_region(((data.get(f"g{i}") or {}).get("tasks") or [{}])[0], pool) for i, r in enumerate(rows)
-            if f"g{i}" in data}, cost, []
+    """The top region of each row: one Trends map call for up to five rows.
+
+    The map is asked for worldwide (no location), so its rows are the countries and their
+    codes are the market codes the pool holds.
+    """
+    out, cost, errors = {}, 0, []
+    for start in range(0, len(rows), MAP_KEYWORDS):
+        chunk = rows[start:start + MAP_KEYWORDS]
+        names = list(dict.fromkeys(r["phrase"] for r in chunk))
+        body = {"keywords": names, "time_range": "past_12_months", "item_types": ["google_trends_map"]}
+        try:
+            result, spent = dfs.result(dfs.TRENDS, body)
+        except dfs.DfsError as exc:
+            errors.append(f"top region: {exc}")
+            continue
+        cost += spent
+        maps = _maps(result)
+        for r in chunk:
+            found = maps.get(r["phrase"])
+            out[r["phrase"]] = top_region(found, pool) if found else None
+    return out, cost, errors
 
 
 def assess(rows: list[dict], cfg: dict, known: dict[int, dict] | None = None) -> tuple[int, list[str]]:

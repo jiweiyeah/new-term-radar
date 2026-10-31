@@ -1,6 +1,6 @@
 """SERP shape: what kind of pages hold page one, for the terms rated prioritize.
 
-From the live top ten organic results (DataForSEO through AIsa, US / en / desktop by
+From the live top ten organic results (DataForSEO through Monid, US / en / desktop by
 default; the page-one check's own results are reused when it read the same market):
 
 - `homepages` and `inner`: a result at a site's root ("/", "/index.html", a bare locale
@@ -25,7 +25,7 @@ from __future__ import annotations
 import re
 from urllib.parse import urlsplit
 
-from . import aisa, competition
+from . import competition, dfs
 
 LOCALES = {"en", "de", "fr", "es", "it", "pt", "nl", "ja", "ko", "zh", "ru", "pl", "tr", "ar", "id", "vi", "th", "sv", "da", "no", "fi"}
 
@@ -98,7 +98,7 @@ def assess(rows: list[dict], cfg: dict) -> tuple[int, list[str]]:
             try:
                 page, spent = competition.page_one(r["phrase"], c["location_code"], c["language_code"], c["device"])
                 cost, results = cost + spent, page["results"]
-            except aisa.AisaError as exc:
+            except dfs.DfsError as exc:
                 errors.append(f"{r['phrase']} (SERP shape): {exc}")
                 continue
         r["serp"] = shape(results, r["phrase"], c["platforms"])

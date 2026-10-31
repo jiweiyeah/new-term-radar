@@ -34,14 +34,20 @@
       },
       "environmentVariables": [
         {
-          "name": "AISA_API_KEY",
-          "description": "AIsa key. X posts, search volumes, DataForSEO Trends and the models all go through it.",
+          "name": "MONID_API_KEY",
+          "description": "Monid key. X posts, search volumes, DataForSEO Trends and the site ratings all go through it.",
           "isRequired": true,
           "isSecret": true
         },
         {
-          "name": "GOANYAPI_API_KEY",
-          "description": "Optional. Adds what people searched together with each name, and one country's settled daily series.",
+          "name": "OPENAI_API_KEY",
+          "description": "The model gateway: the name judge, the keyword table's phrases, the pains and the sellers go through it.",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "AISA_API_KEY",
+          "description": "Optional. The second door for Google's own numbers: it answers the same readings when Monid's answer does not come back.",
           "isRequired": false,
           "isSecret": true
         },

@@ -17,18 +17,18 @@ point is older than the range: `since_start`, never new.
 What it cannot tell: a term made of words people searched before ("nano banana" reads a
 little interest in 2021) is dated by those older searches.
 
-Cost seen in October 2026: one Trends task per row, $0.0012.
+Cost seen in October 2026: one Trends call per row through Monid, $0.011.
 """
 from __future__ import annotations
 
 from datetime import date
 
-from . import aisa, review
+from . import dfs, review
 
 
-def series(task: dict) -> list[tuple[date, int, date]]:
-    """(the day the period ends, value, the day it starts) from one Trends task, the graph item only."""
-    items = ((task.get("result") or [{}])[0] or {}).get("items") or []
+def series(result: dict) -> list[tuple[date, int, date]]:
+    """(the day the period ends, value, the day it starts) from one Trends result, the graph item only."""
+    items = result.get("items") or []
     graph = next((i for i in items if "graph" in str(i.get("type", ""))), items[0] if items else {})
     out = []
     for p in graph.get("data") or []:
@@ -59,17 +59,17 @@ def assess(rows: list[dict], cfg: dict, today: date) -> tuple[int, list[str]]:
     c = cfg["word_age"]
     if not c.get("enabled") or not rows:
         return 0, []
-    calls = [{"call_id": f"a{i}", "tool": review.TOOL, "arguments": {"body": [{"keywords": [r["phrase"]], "time_range": c["time_range"]}]}}
-             for i, r in enumerate(rows)]
-    try:
-        data, cost = aisa.call_all(calls)
-    except aisa.AisaError as exc:
-        return 0, [f"word age: {exc}"]
-    errors = []
-    for i, r in enumerate(rows):
-        if f"a{i}" not in data:
+    cost, errors, last = 0, [], ""
+    for r in rows:
+        try:
+            result, spent = dfs.result(dfs.TRENDS, {"keywords": [r["phrase"]], "time_range": c["time_range"]})
+        except dfs.DfsError as exc:
+            last = str(exc)
             errors.append(f"{r['phrase']} (word age)")
             continue
-        r["age"] = first_seen(series(((data[f"a{i}"].get("tasks")) or [{}])[0]), today, c["new_days"])
+        cost += spent
+        r["age"] = first_seen(series(result), today, c["new_days"])
         r["is_new"] = r["age"]["is_new"]
+    if len(errors) == len(rows):
+        errors.append(f"word age: {last}")
     return cost, errors

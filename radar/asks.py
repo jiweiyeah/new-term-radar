@@ -1,13 +1,14 @@
 """Signal ⑦: what people ask for on Reddit ("is there an AI tool that…").
 
 A request is demand said out loud. Once a week (asks.weekday, Monday by default) this searches
-Reddit for the ways people ask for a tool (`patterns`, $0.0019 a query through AIsa), keeps the
-posts of the last week, and a small model sorts each: a request for something that does a job,
-a complaint about a tool, a solution someone shares, or other. For requests and complaints it
-writes the job as the words a person would search ("convert powerpoint slides to notes"). The
-jobs are sized with Google Ads volumes and the ones with searches are checked for room on page
-one; each of those becomes a lead. Most asks are too specific to have searches yet ("add b roll
-automatically"); the best scored of those are listed too, as ideas rather than keywords.
+Reddit for the ways people ask for a tool (`patterns`, $0.00035 a query through Monid), keeps the
+posts of the last week, and a small model (through Monid) sorts each: a request for something
+that does a job, a complaint about a tool, a solution someone shares, or other. For requests
+and complaints it writes the job as the words a person would search ("convert powerpoint slides
+to notes"). The jobs are sized with Google Ads volumes and the ones with searches are checked
+for room on page one; each of those becomes a lead. Most asks are too specific to have searches
+yet ("add b roll automatically"); the best scored of those are listed too, as ideas rather than
+keywords.
 With `ai_answers` on, the jobs with searches are also put to ChatGPT (and Google's AI Mode)
 as a question, to see which tools the answers name and which sites they cite
 (radar/ai_answers.py).
@@ -25,11 +26,11 @@ import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from . import UA, ai_answers, aisa, competition, snap, social, usecases
+from . import UA, ai_answers, aisa, competition, dfs, llm, monid, net, snap, social, usecases
 from .i18n import t
 
 CHUNK = 20
-X_TOOL = "get_twitter_tweet_advanced_search"
+X_ENDPOINT = "/twitter.search"
 SYSTEM = (
     "You read Reddit posts for a researcher who builds small AI tools. For each post decide its kind: 'request' "
     "(someone asks for a tool or a way to get a job done), 'complaint' (someone is unhappy with a tool or a manual "
@@ -64,12 +65,14 @@ def parse(answer: str, n: int) -> dict[int, dict]:
 
 
 def x_posts(c: dict) -> tuple[list[dict], int]:
-    """Posts on X that ask for a tool (AIsa's advanced search, $0.003, media credits), last week, `x_min_likes` or more."""
+    """Posts on X that ask for a tool (Monid's X search, $0.002 a call, media credits), last week, `x_min_likes` or more."""
     since = (date.today() - timedelta(days=7)).isoformat()
-    data, cost = aisa.call([{"call_id": "x", "tool": X_TOOL, "arguments": {
-        "query": f"{c['x_query']} lang:en min_faves:{c['x_min_likes']} -filter:replies since:{since}", "queryType": "Top"}}])
-    return [{"id": f"x:{p['id']}", "title": p.get("text") or "", "text": "", "subreddit": "x", "score": int(p.get("likeCount") or 0),
-             "url": p.get("url") or "", "created": x_time(p.get("createdAt") or "")} for p in (data.get("x") or {}).get("tweets") or []], cost
+    query = f"{c['x_query']} lang:en min_faves:{c['x_min_likes']} -filter:replies since:{since}"
+    posts, cost = monid.anyapi_rows(X_ENDPOINT, {"query": query, "queryType": "Top"})
+    return [{"id": f"x:{p.get('id') or ''}", "title": p.get("text") or "", "text": "", "subreddit": "x",
+             "score": int(p.get("likeCount") or 0), "url": p.get("url") or "",
+             "created": float(p.get("createdUtc") or 0) or x_time(p.get("createdAt") or "")}
+            for p in posts if int(p.get("likeCount") or 0) >= c["x_min_likes"]], cost
 
 
 def x_time(stamp: str) -> float:
@@ -91,7 +94,7 @@ def stack_questions(c: dict) -> tuple[list[dict], int]:
     for path, site, extra in asks_for:
         url = (f"https://api.stackexchange.com/2.3/{path}?" + urllib.parse.urlencode(
             {"order": "desc", "sort": "creation", "fromdate": since, "site": site, "pagesize": 50, **extra}))
-        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": UA}), timeout=30) as res:
+        with net.fetch(urllib.request.Request(url, headers={"User-Agent": UA}), 30) as res:
             raw = res.read()
         body = json.loads(gzip.decompress(raw) if raw[:2] == b"\x1f\x8b" else raw)     # the API gzips whether asked or not
         out += [{"id": f"se:{q['question_id']}", "title": html.unescape(q.get("title") or ""), "text": "", "subreddit": site,
@@ -109,7 +112,7 @@ def freelancer_jobs(c: dict) -> tuple[list[dict], int]:
     for words in c["freelancer_queries"]:
         url = "https://www.freelancer.com/api/projects/0.1/projects/active/?" + urllib.parse.urlencode(
             {"query": words, "limit": 50, "from_time": since, "full_description": "false"})
-        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": UA}), timeout=30) as res:
+        with net.fetch(urllib.request.Request(url, headers={"User-Agent": UA}), 30) as res:
             projects = json.load(res).get("result", {}).get("projects", [])
         for p in projects:
             if p["id"] in seen:                          # one job answers several of the searches
@@ -139,7 +142,7 @@ def collect(c: dict) -> tuple[list[dict], int, list[str]]:
     for q in c["patterns"]:
         try:
             got, spent = social.reddit(q, time=c["time"], sort="top", limit=25)
-        except aisa.AisaError as exc:
+        except (aisa.AisaError, monid.MonidError) as exc:
             errors.append(f"{q}: {exc}")
             continue
         cost += spent
@@ -150,7 +153,7 @@ def collect(c: dict) -> tuple[list[dict], int, list[str]]:
     for name in c.get("extra_sources", []):
         try:
             got, spent = EXTRA[name](c)
-        except (OSError, ValueError, KeyError, aisa.AisaError) as exc:
+        except (OSError, ValueError, KeyError, aisa.AisaError, monid.MonidError) as exc:
             errors.append(f"{name}: {str(exc)[:120]}")
             continue
         cost += spent
@@ -168,9 +171,9 @@ def classify(model: str, posts: list[dict]) -> tuple[list[dict], list[str]]:
         user = json.dumps([{"i": i, "title": p["title"], "text": p["text"][:300], "subreddit": p["subreddit"]}
                            for i, p in enumerate(chunk)], ensure_ascii=False)
         try:
-            for i, v in parse(aisa.chat(model, SYSTEM, user), len(chunk)).items():
+            for i, v in parse(llm.chat(model, SYSTEM, user), len(chunk)).items():
                 kept.append({**chunk[i], **v})
-        except aisa.AisaError as exc:
+        except llm.LlmError as exc:
             errors.append(str(exc)[:160])
     return kept, errors
 
@@ -187,7 +190,11 @@ def asks(cfg: dict, state: Path, today: date | None = None) -> dict:
         j["score"] += p["score"]
         if p["subreddit"] not in j["subreddits"]:
             j["subreddits"].append(p["subreddit"])
-    vol, spent = usecases.volumes(sorted(jobs), c["location_code"]) if jobs else ({}, 0)
+    try:
+        vol, spent = usecases.volumes(sorted(jobs), c["location_code"]) if jobs else ({}, 0)
+    except dfs.DfsError as exc:             # the searches of a keyword: the week's posts are worth keeping anyway
+        vol, spent = {}, 0
+        errors.append(f"search volumes: {exc}")
     cost += spent
     rows = sorted((dict(j, volume=vol.get(k, {}).get("volume", 0), decision="watch") for k, j in jobs.items()
                    if vol.get(k, {}).get("volume", 0) >= c["min_volume"]), key=lambda r: (-r["score"], -r["volume"]))[:c["max_leads"]]

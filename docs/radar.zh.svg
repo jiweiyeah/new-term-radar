@@ -74,13 +74,13 @@
 <text x="495.0" y="556.0" fill="#534AB7" font-size="12">你的排名 → 更新、改进或新建页面</text>
 <rect x="680" y="474" width="30" height="15" rx="7.5" fill="#534AB7"/><text x="695" y="485" font-size="10" fill="#FFFFFF" font-weight="600">新增</text>
 <rect x="260" y="616" width="220" height="72" rx="4" fill="#FAECE7" stroke="#993C1D" stroke-width="0.5"/>
-<text x="370.0" y="639.0" fill="#712B13" font-weight="500">取证（AIsa）</text>
+<text x="370.0" y="639.0" fill="#712B13" font-weight="500">取证（Monid）</text>
 <text x="370.0" y="658.0" fill="#993C1D" font-size="12">高赞推文 · README</text>
 <text x="370.0" y="674.5" fill="#993C1D" font-size="12">付费产品的自述</text>
-<rect x="500" y="616" width="230" height="72" rx="4" fill="#E6F1FB" stroke="#185FA5" stroke-width="1" stroke-dasharray="5 3"/>
-<text x="615.0" y="639.0" fill="#0C447C" font-weight="500">GoAnyAPI（可选）</text>
-<text x="615.0" y="658.0" fill="#185FA5" font-size="12">相关查询 · 美国日走势</text>
-<text x="615.0" y="674.5" fill="#185FA5" font-size="11">by 饭特稀 | Fentix @fantexi997</text>
+<rect x="500" y="616" width="230" height="72" rx="4" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text x="615.0" y="639.0" fill="#0C447C" font-weight="500">Monid</text>
+<text x="615.0" y="658.0" fill="#185FA5" font-size="12">站点评分 · 访问量 · 组合站</text>
+<text x="615.0" y="674.5" fill="#185FA5" font-size="12">Ahrefs · Similarweb · Google</text>
 <rect x="170" y="720" width="420" height="84" rx="4" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
 <text x="380.0" y="740.0" fill="#085041" font-weight="500">日报（每天一次）</text>
 <text x="380.0" y="759.0" fill="#0F6E56" font-size="12">新词表在最前 · 线索存入 radar.db</text>

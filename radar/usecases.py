@@ -4,23 +4,23 @@ A name ("SynthID Detector") has a short life as a keyword and belongs to someone
 job it does ("ai image detector") is what people keep searching, and nobody owns it.
 For the day's new names this step:
 
-  1. collects evidence: popular posts that mention the name (AIsa, X advanced search)
+  1. collects evidence: popular posts that mention the name (Monid's X search)
      and, for a repository, its README;
   2. asks a model which jobs the evidence shows people doing, and the keyword an
      ordinary person would type for each job. A phrase built on another product's name
      ("photoshop alternative") is kept and marked `brand`: demand often hangs on the
      incumbent, and that is yours to weigh;
-  2b. with a GoAnyAPI key (optional), also takes Google Trends' related queries for the
+  2b. also takes Google Trends' related queries for the
      name: what people really searched together with it. Queries that hold the name are
      its long-tails ("photocraft download"); the others join the phrases; those that are
      themselves names of other new things ("gpt image 2.5" beside "nano banana 2.1") are
-     handed back as leads of kind "cosearch". With that key the names and the bigger
-     generic terms also take their shape from a 30-day series for one country, which is
-     settled to yesterday and shows moves the worldwide series flattens;
+     handed back as leads of kind "cosearch". The names and the bigger generic terms
+     also take their shape from a daily series for one country, which is settled to
+     yesterday and shows moves the worldwide series flattens;
   3. screens them: a second call scores how well the name answers each phrase, and the
      loosely related ones are dropped (a keyword taken from a passing comparison);
   4. looks the rest up: Google Ads monthly searches (one batch call);
-  5. reads DataForSEO Trends (worldwide, through AIsa) for the names and for the phrases with enough volume, twice
+  5. reads DataForSEO Trends (worldwide, through Monid) for the names and for the phrases with enough volume, twice
      each: alone, for the shape of the curve (when it started rising, its peak, what it
      is doing now), and next to a benchmark keyword ("gpts" by default), for the size.
      A generic term's searches a day come from its own Google Ads volume, moved to today
@@ -42,16 +42,19 @@ config: the word's age (wordage.py: when it first drew searches; a term from the
 year reads one step easier on page one), its markets (markets.py: searches and difficulty
 in several countries, the best market, the top region) and, for the prioritized rows, the
 shape of page one (serpshape.py: homepages against inner pages, platforms, exact titles).
-Four more cost nothing: the twelve months of searches the volume call already carries
-(curve.py: new since, peaked, falling, rising or steady), whether your own site ranks for the
-row already (yours.py: from the page-one results and Search Console, so the action is an
-update, an improvement or a new page), the forum threads and AI overview on page one
-(competition.py) and, for the prioritized rows, whether the exact-match .com is free
-(dotcom.py, RDAP).
+Four more cost nothing beyond the page one the competition reading already buys: the
+twelve months of searches the volume call already carries (curve.py: new since, peaked,
+falling, rising or steady), whether your own site ranks for the row already (yours.py: from
+the page-one results and Search Console, so the action is an update, an improvement or a
+new page), the forum threads and AI overview on that page one (competition.py) and, for the
+prioritized rows, whether the exact-match .com is free (dotcom.py, RDAP).
 
-Costs seen in October 2026: $0.003 per name for the posts, $0.09 for the volume batch
-(up to 1,000 phrases), $0.0012 per Trends lookup (two per row of the table), plus the model's tokens.
-The three readings above add about $0.41 a run plus $0.004 a row (see each module).
+Costs seen in October 2026: $0.002 per name for the posts and $0.011 per name for the
+related queries, $0.09 for the volume batch (up to 1,000 phrases), $0.011 per Trends
+lookup (two per row of the table), about $0.03 a row for the page one with its ratings and
+its difficulty, plus the model's tokens. The three readings above add about $0.41 a run
+plus $0.013 a row (see each module). One name in one call comes to about $0.70 and five
+names to about $1.05: the markets reading is paid once a call, whatever the number of names.
 """
 from __future__ import annotations
 
@@ -61,11 +64,10 @@ import os
 import re
 import statistics
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 from pathlib import Path
 
-from . import UA, aisa, competition, curve, dotcom, goanyapi, markets, review, serpshape, snap, wordage, yours
+from . import UA, competition, curve, dfs, dotcom, google, llm, markets, monid, net, review, serpshape, snap, wordage, yours
 
 POSTS_KEPT = 12
 POST_CHARS = 400
@@ -81,8 +83,7 @@ NEW_BASE_MAX = 10          # a baseline under 10 (of 100) means the term barely 
 MAX_PER_NAME = 6
 STATE_DAYS = 30
 ASKED_MAX = 8              # names read in one `keywords` call: each costs several paid lookups
-SEARCH_TOOL = "get_twitter_tweet_advanced_search"
-VOLUME_TOOL = "post_dataforseo_keywords_gads_search_volume_live"
+SEARCH_ENDPOINT = "/twitter.search"     # X's search, through Monid's anyapi tools
 SYSTEM = (
     "You help an SEO researcher who builds tool pages around new AI releases. You get the NAME of a new model, product "
     "or repository and EVIDENCE: popular posts about it and, for a repository, its README.\n"
@@ -119,7 +120,7 @@ def _readme(repo: str) -> str:
     if tok:
         headers["Authorization"] = f"Bearer {tok}"
     try:
-        with urllib.request.urlopen(urllib.request.Request(f"https://api.github.com/repos/{repo}/readme", headers=headers), timeout=30) as res:
+        with net.fetch(urllib.request.Request(f"https://api.github.com/repos/{repo}/readme", headers=headers), 30) as res:
             return base64.b64decode(json.load(res)["content"]).decode("utf-8", "replace")[:README_CHARS]
     except (OSError, KeyError, ValueError):
         return ""
@@ -129,24 +130,22 @@ def evidence(names: list[str], repos: dict[str, str], today: date,
              texts: dict[str, tuple[str, str]] | None = None) -> tuple[dict[str, dict], int]:
     """{name: {"posts": [...], "readme": str, "error": str}} and the cost in micro-USD.
 
-    One request per name: the router runs a batch's calls one after another, a post
-    search takes 15 to 25 seconds, and its gateway gives up at 60, so two names in one
-    request timed out twice on 2026-10-13 while each alone answered. A name whose search
-    fails goes on with its README and the related queries, and the table says so."""
+    One call per name: a post search takes 15 to 25 seconds and Monid's run gives up on
+    it after 90, so two names in one request timed out twice on 2026-10-13 while each
+    alone answered. A name whose search fails goes on with its README and the related
+    queries, and the table says so."""
     since = (today - timedelta(days=SEARCH_DAYS)).isoformat()
     out, cost = {}, 0
     for n in names:
         error, tweets = "", []
         try:
-            data, spent = aisa.call([{"call_id": "s", "tool": SEARCH_TOOL, "arguments": {
-                "query": f'"{n}" min_faves:{MIN_FAVES} -filter:replies since:{since}', "queryType": "Top"}}])
+            tweets, spent = monid.anyapi_rows(SEARCH_ENDPOINT, {
+                "query": f'"{n}" min_faves:{MIN_FAVES} -filter:replies since:{since}', "queryType": "Top"})
             cost += spent
-            d = data.get("s") or {}
-            tweets = d.get("tweets") or (d.get("data") or {}).get("tweets") or []
-        except aisa.AisaError as exc:
+        except monid.MonidError as exc:
             error = " ".join(re.sub(r"<[^>]+>", " ", str(exc)).split())[:80]
         posts = sorted(({"text": " ".join((t.get("text") or "").split()), "likes": int(t.get("likeCount") or 0),
-                         "by": (t.get("author") or {}).get("userName") or "?", "url": t.get("url", "")} for t in tweets),
+                         "by": t.get("authorUsername") or "?", "url": t.get("url", "")} for t in tweets),
                        key=lambda p: -p["likes"])[:POSTS_KEPT]
         out[n] = {"posts": posts, "readme": _readme(repos[n]) if repos.get(n) else "", "repo": repos.get(n, ""), "error": error}
         if not out[n]["readme"] and (texts or {}).get(n):     # a product's own listing stands in for a README
@@ -176,7 +175,7 @@ def propose(model: str, name: str, ev: dict) -> list[dict]:
         return []
     posts = "\n".join(f"- ({p['likes']} likes) @{p['by']}: {p['text'][:POST_CHARS]}" for p in ev["posts"])
     user = f"NAME: {name}\n\nPOSTS:\n{posts or '(none found)'}\n" + (f"\nREADME of {ev['repo']}:\n{ev['readme']}\n" if ev["readme"] else "")
-    return parse(aisa.chat(model, SYSTEM, user, max_tokens=900), name)
+    return parse(llm.chat(model, SYSTEM, user, max_tokens=900), name)
 
 
 SCREEN = (
@@ -201,7 +200,6 @@ SCREEN = (
 RELEVANT_MIN = 0.6
 RELATED_KEPT = 12          # related queries per name that go to the screen
 COSEARCH_KEPT = 5          # other names kept as leads per name
-COUNTRY_WORKERS = 3        # one-country lookups in flight at once
 
 
 def squash(text: str) -> str:
@@ -236,8 +234,8 @@ def screen(model: str, name: str, ev: dict, cands: list[dict]) -> list[dict]:
     user = f"NAME: {name}\n\nEVIDENCE:\n{posts or ev['readme'][:1200]}\n\nCANDIDATES:\n" + json.dumps(
         [{"i": i, "keyword": c["phrase"]} for i, c in enumerate(cands)], ensure_ascii=False)
     try:
-        answer = aisa.chat(model, SCREEN, user, max_tokens=600)
-    except aisa.AisaError:
+        answer = llm.chat(model, SCREEN, user, max_tokens=600)
+    except llm.LlmError:
         return cands
     m = re.search(r"\[.*\]", answer, re.S)
     try:
@@ -283,18 +281,22 @@ def volumes(phrases: list[str], location_code: int) -> tuple[dict[str, dict], in
     """{phrase: {"volume", "month"}} from Google Ads, one batch call."""
     if not phrases:
         return {}, 0
-    data, cost = aisa.call([{"call_id": "vol", "tool": VOLUME_TOOL, "arguments": {"body": [{
-        "keywords": phrases, "location_code": location_code, "language_code": "en"}]}}])
+    rows, cost = dfs.rows(dfs.VOLUME, {"keywords": phrases, "location_code": location_code, "language_code": "en"})
     out = {}
-    for r in ((data.get("vol") or {}).get("tasks") or [{}])[0].get("result") or []:
-        months = sorted((f"{m['year']}-{m['month']:02d}", int(m.get("search_volume") or 0)) for m in r.get("monthly_searches") or [])
+    for r in rows:
+        if not r.get("keyword"):
+            continue
+        # A month of a row that is not shaped like a month is left out, not raised: one odd row
+        # must not take the whole table with it.
+        months = sorted((f"{m.get('year')}-{int(m.get('month') or 0):02d}", int(m.get("search_volume") or 0))
+                        for m in r.get("monthly_searches") or [] if m.get("year") and m.get("month"))
         out[r["keyword"]] = {"volume": int(r.get("search_volume") or 0), "month": months[-1][0] if months else "",
                              "months": [list(m) for m in months]}     # oldest first, for the twelve-month curve (curve.py)
     return out, cost
 
 
 WORLD = {"unsettled": review.UNSETTLED_DAYS, "window": 30, "factor": review.RISE_FACTOR, "days": 2}
-# One country, 30 days, settled to yesterday (goanyapi.daily_series). The rise is judged in
+# One country, settled to yesterday (google.daily_series). The rise is judged in
 # the last 10 days against the 20 before. An established term has a high baseline, so the
 # bar is 1.5x for three days: "photoshop alternative" ran 77-100 against 50 for five days
 # after PhotoCraft appeared, a real move that 2x would miss.
@@ -351,26 +353,12 @@ def country_series(rows: list[dict], c: dict) -> tuple[dict[str, list], int, lis
     at least `country_min_volume` searches a month, `country_max` of those at most. The cap
     is on the generic terms alone: when it covered names too, five names left room for three
     generic terms, and "photoshop alternative" fell back to the worldwide series and read
-    flat the day after it had read rising. A lookup takes 20 to 55 seconds, so they run
-    COUNTRY_WORKERS at a time."""
+    flat the day after it had read rising. The series is read from DataForSEO's Trends for
+    the country the config names; a term whose call failed is named in the errors."""
     generic = sorted((r for r in rows if r["kind"] == "generic" and r.get("volume", 0) >= c["country_min_volume"]),
                      key=lambda r: -r["volume"])[:c["country_max"]]
     picked = [r["phrase"] for r in rows if r["kind"] == "name"] + [r["phrase"] for r in generic]
-
-    def one(phrase: str):
-        try:
-            return phrase, goanyapi.daily_series(phrase, c["related_geo"]), ""
-        except goanyapi.GoAnyError as exc:
-            return phrase, ([], 0), str(exc)
-    out, cost, errors = {}, 0, []
-    with ThreadPoolExecutor(max_workers=COUNTRY_WORKERS) as pool:
-        for phrase, (series, spent), error in pool.map(one, picked):
-            cost += spent
-            if error:
-                errors.append(f"{phrase}: {error}")
-            else:
-                out[phrase] = series
-    return out, cost, errors
+    return google.daily_series(picked, c["related_geo"])
 
 
 def _mean(values: list[int]) -> float:
@@ -435,13 +423,11 @@ def decide(s: dict, per_day: int | None, min_daily: int) -> str:
     return "prioritize" if big else "watch"
 
 
-def _pairs(task: dict) -> list[tuple[date, int, int]]:
-    try:
-        item = task["result"][0]["items"][0]
-    except (KeyError, IndexError, TypeError):
-        return []
+def _pairs(result: dict) -> list[tuple[date, int, int]]:
+    """(day, the term's value, the benchmark's) from one Trends result asked for two keywords."""
+    item = next((i for i in result.get("items") or [] if "graph" in str(i.get("type", ""))), {})
     rows = []
-    for p in item.get("data", []):
+    for p in item.get("data") or []:
         v = (p.get("values") or []) + [0, 0]
         rows.append((date.fromisoformat(p["date_from"]), int(v[0] or 0), int(v[1] or 0)))
     return rows
@@ -450,13 +436,27 @@ def _pairs(task: dict) -> list[tuple[date, int, int]]:
 def fetch_series(keywords: list[str], benchmark: str, today: date) -> tuple[dict[str, dict], int]:
     """{keyword: {"solo": [(day, value)], "pair": [(day, value, benchmark value)]}}: two Trends lookups each."""
     window = {"date_from": (today - timedelta(days=TRENDS_DAYS)).isoformat(), "date_to": today.isoformat()}
-    calls = []
-    for i, k in enumerate(keywords):
-        calls.append({"call_id": f"s{i}", "tool": review.TOOL, "arguments": {"body": [{"keywords": [k], **window}]}})
-        calls.append({"call_id": f"p{i}", "tool": review.TOOL, "arguments": {"body": [{"keywords": [k, benchmark], **window}]}})
-    data, cost = aisa.call_all(calls)
-    task = lambda cid: ((data.get(cid) or {}).get("tasks") or [{}])[0]  # noqa: E731
-    return {k: {"solo": review._series(task(f"s{i}")), "pair": _pairs(task(f"p{i}"))} for i, k in enumerate(keywords)}, cost
+    out, cost, failed, last = {}, 0, 0, ""
+    for k in keywords:
+        solo, pair = [], []
+        try:
+            result, spent = dfs.result(dfs.TRENDS, {"keywords": [k], **window})
+            cost += spent
+            solo = review._series(result)
+        except dfs.DfsError as exc:
+            last = str(exc)
+            failed += 1
+        try:
+            result, spent = dfs.result(dfs.TRENDS, {"keywords": [k, benchmark], **window})
+            cost += spent
+            pair = _pairs(result)
+        except dfs.DfsError as exc:
+            last = str(exc)
+            failed += 1
+        out[k] = {"solo": solo, "pair": pair}
+    if keywords and failed == 2 * len(keywords):
+        raise dfs.DfsError(last)
+    return out, cost
 
 
 def measure(rows: list[dict], series: dict[str, dict], min_daily: int, today: date,
@@ -500,17 +500,18 @@ def run(cfg: dict, state: Path, names: list[str], repos: dict[str, str], today: 
     tails: dict[str, list[str]] = {}
     cosearch: list[dict] = []
     related_errors: list[str] = []
-    use_related = bool(goanyapi.key()) and c.get("related", True)
+    read_errors: list[str] = []
+    use_related = c.get("related", True) and dfs.keyed()
+    related_all, c0, related_errors = google.related_queries(todo, c["related_geo"]) if use_related else ({}, 0, [])
     for name in todo:
-        cands = [dict(u, source="model") for u in propose(c["model"], name, ev[name])]
+        try:
+            phrases = propose(c["model"], name, ev[name])
+        except llm.LlmError as exc:      # the model refused: this name goes on with the related queries alone
+            phrases = []
+            read_errors.append(f"{name} (model): {exc}")
+        cands = [dict(u, source="model") for u in phrases]
         if use_related:
-            try:
-                related, cost_r = goanyapi.related_queries(name, c["related_geo"])
-            except goanyapi.GoAnyError as exc:
-                related, cost_r = {}, 0
-                related_errors.append(f"{name}: {exc}")
-            c0 += cost_r
-            tails[name], searched = split_related(name, related)
+            tails[name], searched = split_related(name, related_all.get(name) or {})
             have = {u["phrase"] for u in cands}
             cands += [u for u in searched if u["phrase"] not in have]
         asked += len(cands)
@@ -523,17 +524,31 @@ def run(cfg: dict, state: Path, names: list[str], repos: dict[str, str], today: 
             if u["source"] == "searched":
                 row["source"] = "searched"
     bench = c["benchmark"].lower()
-    vol, c2 = volumes(sorted(proposed), c["location_code"])
+    try:
+        vol, c2 = volumes(sorted(proposed), c["location_code"])
+    except (dfs.DfsError, KeyError, TypeError, ValueError) as exc:   # the searches of a keyword: the table goes on without them
+        vol, c2 = {}, 0
+        read_errors.append(f"search volumes: {exc}")
     generic = sorted((dict(r, **vol[p]) for p, r in proposed.items() if vol.get(p, {}).get("volume", 0) >= c["min_volume"]),
                      key=lambda r: -r["volume"])[:c["trends_max"]]
     rows = [{"term": n, "phrase": n, "kind": "name", "names": [], "brand": True, "evidence": "", **vol.get(n, {})} for n in todo] + generic
-    series, c3 = fetch_series([r["phrase"] for r in rows], bench, today)
-    local, c4, local_errors = country_series(rows, c) if goanyapi.key() and c.get("country_trends", True) else ({}, 0, [])
+    try:
+        series, c3 = fetch_series([r["phrase"] for r in rows], bench, today)
+    except (dfs.DfsError, KeyError, TypeError, ValueError) as exc:   # the Trends curves: the rows read "no data" and go on
+        series, c3 = {}, 0
+        read_errors.append(f"Trends curves: {exc}")
+    local, c4, local_errors = country_series(rows, c) if c.get("country_trends", True) and dfs.keyed() else ({}, 0, [])
     daily = measure(rows, series, c["min_daily"], today, local)
     acted, first = [r for r in rows if r["decision"] in ("prioritize", "watch")], [r for r in rows if r["decision"] == "prioritize"]
     c6, age_errors = wordage.assess(acted, cfg, today)          # before the page-one check: a new term reads easier there
     c7, market_errors = markets.assess(acted, cfg, {c["location_code"]: vol})
-    c5, comp_errors = competition.assess(rows, cfg, state) if cfg.get("competition", {}).get("max_rows") else (0, [])
+    # The markets reading bought the difficulty for the table's own market already (the same
+    # endpoint, the same rows): the page-one check reuses it instead of buying it again.
+    own = next((code for code, (loc, _) in markets.LOCATIONS.items() if loc == cfg["competition"]["location_code"]), "")
+    known_kd = {r["phrase"]: cell["kd"] for r in acted
+                for cell in [((r.get("markets") or {}).get("by") or {}).get(own) or {}]
+                if cell.get("kd") is not None} if own else {}
+    c5, comp_errors = competition.assess(rows, cfg, state, known_kd) if cfg.get("competition", {}).get("max_rows") else (0, [])
     c8, serp_errors = serpshape.assess(first, cfg)              # prioritized before the page-one check could demote them
     curve.assess(rows, cfg)                                      # free: the twelve months the volume call carried
     _, own_errors = yours.assess(acted, cfg, today)              # after the page-one check: reads its ten results
@@ -547,12 +562,14 @@ def run(cfg: dict, state: Path, names: list[str], repos: dict[str, str], today: 
         cutoff = (today - timedelta(days=STATE_DAYS)).isoformat()
         snap.save(path, {n: s for n, s in seen.items() if s["first"] >= cutoff})
     return {"names": todo, "rows": rows, "proposed": asked, "relevant": len(proposed), "kept": len(generic), "benchmark": bench,
+            "model": llm.answered_model(),
             "bench_daily": round(daily) if daily else None, "volume_month": next((r["month"] for r in generic if r.get("month")), ""),
             "no_evidence": [n for n in todo if not ev[n]["posts"] and not ev[n]["readme"]],
             "posts_error": "; ".join(f"{n}: {e['error']}" for n, e in ev.items() if e.get("error")),
             "related": use_related, "tails": {n: v for n, v in tails.items() if v}, "cosearch": cosearch,
             "related_errors": related_errors, "geo": c["related_geo"], "country_errors": local_errors,
-            "competition_errors": comp_errors, "extra_errors": age_errors + market_errors + serp_errors + own_errors + com_errors,
+            "competition_errors": comp_errors, "read_errors": read_errors,
+            "extra_errors": age_errors + market_errors + serp_errors + own_errors + com_errors,
             "cost_micros": cost + c0 + c2 + c3 + c4 + c5 + c6 + c7 + c8}
 
 
@@ -576,4 +593,5 @@ def names_to_read(leads_today: list[dict], recent_sources: list[dict]) -> list[s
 
 def degraded(uc: dict) -> bool:
     """A source failed during this run, so the table holds less than it would have."""
-    return bool(uc.get("posts_error") or uc.get("related_errors") or uc.get("country_errors") or uc.get("competition_errors"))
+    return bool(uc.get("posts_error") or uc.get("related_errors") or uc.get("country_errors")
+                or uc.get("competition_errors") or uc.get("read_errors"))

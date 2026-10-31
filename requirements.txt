@@ -1,3 +1,4 @@
 # The radar itself needs only the Python standard library (3.10+).
 markdown>=3.5        # only for --mail
 # mcp>=1.2          # only for the MCP server (python -m radar.mcp_server)
+openai>=1.40         # only for the model gateway (the standard library speaks the same protocol without it)

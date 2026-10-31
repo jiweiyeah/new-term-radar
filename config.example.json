@@ -32,7 +32,7 @@
   "known_terms": ["claude code", "remotion"],
   "stop_words": [],
 
-  "judge": {"model": "gpt-4.1-mini", "min_score": 0.5},
+  "judge": {"model": "gpt-5.4-mini", "min_score": 0.5},
   "breakout": {"window_days": 14, "min_stars": 300, "velocity_min": 200, "delta_min": 400},
   "new_sites": {"queries": {"ai": "%ai%", "video": "%video%"}, "weekday": 0, "words": 10},
   "revenue": {"weekday": 0, "pages_growth": 3, "pages_new": 3, "min_revenue_usd": 500, "category": "", "max_leads": 10},
@@ -46,7 +46,7 @@
   "dot_com": {"enabled": true, "max_rows": 8},
   "ai_answers": {"enabled": false, "engines": ["chatgpt"], "max_rows": 6, "prompt": "What is the best tool to {job}?", "location_code": 2840, "language_code": "en"},
   "review": {"after_days": 14, "per_day": 5},
-  "usecases": {"per_day": 5, "model": "claude-sonnet-4-6", "benchmark": "gpts", "min_volume": 50, "min_daily": 300, "related": true, "related_geo": "US", "country_trends": true, "country_min_volume": 1000, "country_max": 8},
+  "usecases": {"per_day": 5, "model": "claude-sonnet-5", "benchmark": "gpts", "min_volume": 50, "min_daily": 300, "related": true, "related_geo": "US", "country_trends": true, "country_min_volume": 1000, "country_max": 8},
 
   "gsc": {}
 }

@@ -1,7 +1,7 @@
 """Signal ①, the sources: where a new name is said first.
 
 x_new    names in the last day's posts of the accounts in config.json ("x_accounts",
-         read through AIsa) that none of those accounts has used in the last VOCAB_DAYS.
+         read through Monid) that none of those accounts has used in the last VOCAB_DAYS.
          The vocabulary is kept in the state directory; the first run only builds it.
 hf_new   models that entered Hugging Face's trending top HF_TOP since the last run (the
          public API, no key). Quantised and fine-tuned copies of one model are grouped
@@ -15,7 +15,7 @@ import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from . import UA, aisa, snap
+from . import UA, monid, net, snap
 from .i18n import t
 from .terms import STOP, _drop_nested, names
 
@@ -34,10 +34,18 @@ def accounts(cfg: dict) -> list[str]:
 
 
 def _posted(post: dict) -> datetime | None:
+    """When the post was written: the epoch second the answer carries."""
     try:
-        return datetime.strptime(post["createdAt"], "%a %b %d %H:%M:%S %z %Y")
-    except (KeyError, ValueError):
+        return datetime.fromtimestamp(int(post["createdUtc"]), timezone.utc)
+    except (KeyError, TypeError, ValueError, OSError, OverflowError):
         return None
+
+
+def _own(handle: str, tweet: dict) -> bool:
+    """Whether the post is the account's own: the profile's posts tab also holds reposts,
+    and those carry the name of the account they came from."""
+    author = (tweet.get("authorHandle") or "").lstrip("@").lower()
+    return not author or author == handle.lower()
 
 
 def novel_names(posts: list[dict], vocab: dict[str, str], now: datetime) -> list[dict]:
@@ -86,13 +94,22 @@ def x_new(cfg: dict, state: Path) -> dict:
     handles = accounts(cfg)
     if not handles:
         return {"skipped": True}
-    data, cost = aisa.call_all([{"call_id": h, "tool": "get_twitter_user_last_tweets", "arguments": {"userName": h}}
-                                for h in handles])
-    posts = []
+    posts, cost, answered, errors = [], 0, 0, []
     for h in handles:
-        for tw in ((data.get(h) or {}).get("data") or {}).get("tweets") or []:
-            posts.append({"account": h, "text": tw.get("text") or "", "likes": int(tw.get("likeCount") or 0),
+        try:
+            data, spent = monid.anyapi("/twitter.user_posts", {"handle": h})
+        except monid.MonidError as exc:
+            errors.append(f"{h}: {exc}")
+            continue
+        cost += spent
+        answered += 1
+        for tw in data.get("tweets") or data.get("items") or []:
+            if not _own(h, tw):
+                continue
+            posts.append({"account": h, "text": tw.get("text") or "", "likes": int(tw.get("likes") or 0),
                           "url": tw.get("url", ""), "created": _posted(tw)})
+    if not answered:
+        raise monid.MonidError("no account answered: " + "; ".join(errors)[:200])
     path = state / "x_vocab.json.gz"
     vocab: dict[str, str] | None = snap.load(path)
     first_run = vocab is None
@@ -106,7 +123,7 @@ def x_new(cfg: dict, state: Path) -> dict:
             vocab[term] = today
     if posts:   # a failed fetch keeps yesterday's vocabulary
         snap.save(path, {term: d for term, d in vocab.items() if d >= cutoff})
-    return {"accounts": len(handles), "answered": len(data), "posts": len(posts), "cost_micros": cost,
+    return {"accounts": len(handles), "answered": answered, "posts": len(posts), "cost_micros": cost,
             "first_run": first_run, "terms": rows}
 
 
@@ -128,7 +145,7 @@ SPACE_NOISE = {"demo", "webgpu", "studio", "space", "spaces", "playground", "gra
 def _trending(what: str) -> list[dict]:
     req = urllib.request.Request(f"https://huggingface.co/api/{what}?sort=trendingScore&direction=-1&limit={HF_FETCH}",
                                  headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=40) as res:
+    with net.fetch(req, 40) as res:
         return json.load(res)
 
 

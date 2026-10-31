@@ -25,7 +25,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-from . import UA, snap
+from . import UA, net, snap
 from .terms import by_source, surges
 
 TIMEOUT = 40
@@ -46,7 +46,7 @@ def fetch(url: str) -> str:
     req = urllib.request.Request(url.replace("&amp;", "&"), headers={"User-Agent": UA, "Accept-Encoding": "gzip"})
     for attempt in range(RETRIES):
         try:
-            with urllib.request.urlopen(req, timeout=TIMEOUT) as res:
+            with net.fetch(req, TIMEOUT) as res:
                 body = res.read()
             return (gzip.decompress(body) if body[:2] == b"\x1f\x8b" else body).decode("utf-8", "replace")
         except (OSError, ValueError):

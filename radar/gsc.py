@@ -24,7 +24,7 @@ import urllib.parse
 import urllib.request
 from datetime import date, timedelta
 
-from . import UA
+from . import UA, net
 
 LAG_DAYS = 1
 RECENT, BEFORE = 3, 60
@@ -44,7 +44,7 @@ def _token(cfg: dict) -> str:
                                    "refresh_token": tok["refresh_token"], "grant_type": "refresh_token"}).encode()
     req = urllib.request.Request(tok.get("token_uri") or "https://oauth2.googleapis.com/token", data=body,
                                  headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=30) as res:
+    with net.fetch(req, 30) as res:
         return json.load(res)["access_token"]
 
 
@@ -58,7 +58,7 @@ def _query(access: str, site: str, start: date, end: date, dimensions: list[str]
     url = f"https://www.googleapis.com/webmasters/v3/sites/{urllib.parse.quote(site, safe='')}/searchAnalytics/query"
     req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={
         "Authorization": f"Bearer {access}", "Content-Type": "application/json", "User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=60) as res:
+    with net.fetch(req, 60) as res:
         rows = json.load(res).get("rows", [])
     return [{**dict(zip(dimensions, r["keys"])), "impressions": int(r["impressions"]), "clicks": int(r["clicks"]),
              "position": round(float(r.get("position") or 0), 1)}

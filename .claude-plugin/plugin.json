@@ -29,24 +29,32 @@
       ],
       "env": {
         "AISA_API_KEY": "${user_config.aisa_api_key}",
-        "GOANYAPI_API_KEY": "${user_config.goanyapi_api_key}",
+        "MONID_API_KEY": "${user_config.monid_api_key}",
+        "OPENAI_API_KEY": "${user_config.openai_api_key}",
         "RADAR_CONFIG": "${CLAUDE_PLUGIN_ROOT}/config.example.json",
         "RADAR_STATE": "${CLAUDE_PLUGIN_DATA}/state"
       }
     }
   },
   "userConfig": {
-    "aisa_api_key": {
+    "monid_api_key": {
       "type": "string",
-      "title": "AIsa API key",
-      "description": "Pays for the radar's lookups: X posts, Google Ads volumes, DataForSEO Trends and the model. recent_leads works without it. A key: https://go.aisa.one/yansen-zhu (referral link)",
+      "title": "Monid API key",
+      "description": "Pays for the radar's lookups: X posts, Google Ads volumes, DataForSEO Trends, plus the site ratings, the traffic of a new seller and the AdSense portfolios. recent_leads works without it. A key: https://monid.ai",
       "sensitive": true,
       "default": ""
     },
-    "goanyapi_api_key": {
+    "aisa_api_key": {
       "type": "string",
-      "title": "GoAnyAPI API key (optional)",
-      "description": "Optional: what people searched together with each name, and one country's daily Trends series. A key: https://goanyapi.com",
+      "title": "AIsa API key (optional)",
+      "description": "Optional: the second door for Google's own numbers. It answers the same readings when Monid's answer does not come back. A key: https://go.aisa.one/yansen-zhu (referral link)",
+      "sensitive": true,
+      "default": ""
+    },
+    "openai_api_key": {
+      "type": "string",
+      "title": "Model gateway API key",
+      "description": "The model's calls: the name judge, the keyword table's phrases, the pains, the sellers. An OpenAI-compatible API; the key comes from your own gateway.",
       "sensitive": true,
       "default": ""
     }

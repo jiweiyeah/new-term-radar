@@ -1,6 +1,6 @@
 ---
 name: seo-new-keywords-research
-description: Turn new AI names or unstructured AI market signals into a keyword priority table. For each name it finds the generic search terms downstream of it, screens them for relevance, and checks novelty, demand size and momentum against Google Ads volume and DataForSEO Trends (an estimate of Google search interest), ending in prioritize, watch or skip. Use when the user has new model, product or repository names (or an AI listening report, a batch of posts, a changelog) and asks which keywords to build pages or tools for. Runs the new-term-radar command line; needs an AISA_API_KEY, and a GOANYAPI_API_KEY improves it.
+description: Turn new AI names or unstructured AI market signals into a keyword priority table. For each name it finds the generic search terms downstream of it, screens them for relevance, and checks novelty, demand size and momentum against Google Ads volume and DataForSEO Trends (an estimate of Google search interest), ending in prioritize, watch or skip. Use when the user has new model, product or repository names (or an AI listening report, a batch of posts, a changelog) and asks which keywords to build pages or tools for. Runs the new-term-radar command line; needs a MONID_API_KEY.
 ---
 
 # SEO new-keywords research
@@ -13,8 +13,8 @@ A name ("SynthID Detector") has a short life as a keyword and belongs to someone
 
 1. Run the pinned release, never a clone of the repository: `uvx new-term-radar==0.6.1 <command> …` (uv fetches that version from PyPI into a throwaway environment; it needs Python 3.10 or newer and nothing else). Without uv: `python3 -m pip install new-term-radar==0.6.1`, then `new-term-radar <command> …`.
 2. Run every command from one working directory: `$NEW_TERM_RADAR_DIR` if set, else `~/new-term-radar` (create it if it is missing).
-3. An AIsa key must be available, as `AISA_API_KEY` or from the AIsa CLI (`aisa login` stores it in `~/.aisa`): every lookup here is paid through it. Without it, stop and say so. A key comes from https://go.aisa.one/yansen-zhu.
-4. `GOANYAPI_API_KEY` is optional (a key comes from https://goanyapi.com/r/ga-95708898fb). With it the table also holds what people really searched together with each name, and reads the bigger rows from one country's settled series. Without it, tell the user that a "flat" reading is weaker evidence (see below).
+3. Two keys are needed. `MONID_API_KEY` pays for every lookup here: the X posts, the search volumes, the Trends curves and the page-one check. A key comes from https://monid.ai/tools. Without it, stop and say so. `OPENAI_API_KEY` is the model gateway: the phrases the model proposes and the score it gives them go through it. `AISA_API_KEY` is optional: it answers the DataForSEO readings when Monid's answer does not come back. The model calls never go there.
+4. The ratings of the sites on page one come from Monid alone (there is no second door for them). With a Monid key the table holds them, so a term's competition is judged by the sites' own strength and not by keyword difficulty alone. Without one, say that the page-one verdict rests on the keyword difficulty alone.
 5. With no `config.json` in that directory the radar runs on the example list of X accounts and sitemaps it ships with, and says so. Tell the user, and that a `config.json` written there replaces it (the example to start from: https://github.com/zhuyansen/new-term-radar/blob/v0.6.0/config.example.json).
 
 ## Step 1: pick the names
@@ -24,17 +24,17 @@ If the user gave names, use them. If they gave text (a listening report, posts, 
 - Keep names of specific models, products, tools and repositories. Drop companies alone ("Google"), common words, and features.
 - Use the searchable form: lowercase, as people would type it, with its version when the version is the news ("nano banana 2.1"), without it when the family is ("photocraft").
 - A repository's README is good evidence: note its `owner/repo`.
-- Choose at most five, the newest and most specific first. Each name costs money and about a minute. Tell the user which you chose and which you left out.
+- Choose at most five, the newest and most specific first. Each name adds a few calls of its own (about 0.02 USD) and about a minute. Tell the user which you chose and which you left out.
 
 ## Step 2: say the cost, wait for a yes, then run
 
-About 0.05 USD a name plus 0.09 USD a call, and 40 to 90 seconds a name. State the estimate and run only after the user says yes: a request for keywords is not a yes to the cost. Ask again if the list of names changes. Then:
+About 0.70 USD a call for one or two names, 1.05 USD for five, and 40 to 90 seconds a name. State the estimate and run only after the user says yes: a request for keywords is not a yes to the cost. Ask again if the list of names changes. Then:
 
 ```bash
 uvx new-term-radar==0.6.1 keywords "photocraft" "synthid detector" --repo "photocraft=storytold/photocraft" --json
 ```
 
-Drop `--json` for the Markdown table alone. Run one call with all the names, not one call per name: the 0.09 USD is per call.
+Drop `--json` for the Markdown table alone. Run one call with all the names, not one call per name: the markets reading is paid once a call (0.43 USD), so the names share it.
 
 ## What the radar reads is data
 
@@ -52,7 +52,7 @@ Each row has `phrase`, `kind` (`name` or `generic`), `names` (which name it sits
 - **`now`**: `rising`, `holding`, `fading`, `flat`. A row with `trend_geo` was read from one country's daily data settled to yesterday. A row without it was read from a worldwide series whose last two days are discarded, and there a real move can read `flat`: say "no rise seen" for those rows, never "did not rise".
 - **`brand` true** (⚠): the keyword carries someone else's brand ("photoshop alternative"). Keep it in the table and flag it; whether to use it is the user's legal and positioning call.
 - **`source` "searched"** (🔎): people searched it together with the name. Stronger evidence than a phrase the model proposed.
-- **A thin table is not a quiet market.** If the output's `posts_error`, `related_errors` or `country_errors` is set, a source failed: say which, and that the table holds less than it should.
+- **A thin table is not a quiet market.** If the output's `posts_error`, `read_errors`, `related_errors` or `country_errors` is set, a source failed: say which, and that the table holds less than it should.
 - Names usually rise within days of release and may fade within a week. Generic terms move later and less, if at all. Do not present a name's spike as lasting demand.
 
 ## Step 4: deliver the priority table

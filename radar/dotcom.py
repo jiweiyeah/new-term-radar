@@ -14,7 +14,7 @@ import re
 import urllib.error
 import urllib.request
 
-from . import UA
+from . import UA, net
 
 RDAP = "https://rdap.verisign.com/com/v1/domain/"
 TIMEOUT = 15
@@ -33,7 +33,7 @@ def names(phrase: str) -> list[str]:
 def _get(url: str) -> tuple[int, dict]:
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/rdap+json"})
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as res:
+        with net.fetch(req, TIMEOUT) as res:
             return res.status, json.load(res)
     except urllib.error.HTTPError as exc:
         return exc.code, {}

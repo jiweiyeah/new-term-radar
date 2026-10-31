@@ -12,15 +12,16 @@ Free:
 - new entries in awesome lists on GitHub (`awesome`: raw README URLs).
 
 Paid, small:
-- `google_new`: pages Google indexed in the last week under a path (DataForSEO through AIsa, about
-  $0.02 a path, AIsa media credits): Figma community plugins, There's An AI For That tool pages,
+- `google_new`: pages Google indexed in the last week under a path (DataForSEO through Monid, about
+  $0.02 a path): Figma community plugins, There's An AI For That tool pages,
   Chrome Web Store items. The sites themselves are not touched: Figma answers bots with 403 and
   There's An AI For That with a Cloudflare challenge.
 - `trending`: trending searches on Douyin and TikTok, trending TikTok hashtags and Reddit's
-  trending searches (TikHub through AIsa, $0.001 each), kept only when they name a tool, an
+  trending searches (TikHub through Monid, $0.001 each), kept only when they name a tool, an
   effect, a template or AI.
 - `rising`: the root-word method. For each seed ("ai generator", "ai detector", "ai converter" ...)
-  the searches Google Trends calls rising next to it this month (GoAnyAPI, 6 credits a seed).
+  the searches Google Trends calls rising next to it this month (DataForSEO through Monid, about
+  $0.011 a seed).
 """
 from __future__ import annotations
 
@@ -29,15 +30,14 @@ import json
 import re
 import time
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from . import UA, aisa, goanyapi, snap
+from . import UA, dfs, google, monid, net, snap
 from .i18n import t
 
 TIMEOUT = 20
-SERP = "post_dataforseo_serp_google_organic_live_regular"
+WEEK = "tbs=qdr:w"     # Google's own filter: the pages it indexed in the last week
 # "AI换脸" has no word boundary between I and 换, so the Latin words are fenced by letters, not by \b
 TOOLISH = re.compile(r"(?<![a-z])(ai|app|tool|generator|filter|effect|template|prompt|editor|maker|bot|gpt|agent|plugin|extension|"
                      r"converter|translator|avatar)s?(?![a-z])|特效|模板|滤镜|工具|生成|剪辑|一键|智能|插件", re.I)
@@ -47,7 +47,7 @@ LABEL = {"producthunt": "Product Hunt", "hn": "Show HN", "openrouter": "OpenRout
 
 def get(url: str) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/json, application/xml;q=0.9, */*;q=0.8"})
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as res:
+    with net.fetch(req, TIMEOUT) as res:
         return res.read()
 
 
@@ -133,56 +133,102 @@ def awesome(c: dict) -> tuple[list[dict], int]:
     return out, 0
 
 
+class PartialFailure(RuntimeError):
+    """A reading that failed in part: the rows it did get, and the calls that failed."""
+
+    def __init__(self, rows: list[dict], cost: int, errors: list[str]):
+        super().__init__("; ".join(errors))
+        self.rows, self.cost, self.errors = rows, cost, errors
+
+
+def _serp(path: str) -> tuple[list[dict], int]:
+    """The pages Google has under a path, the ones of the last week first.
+
+    The week filter is Google's own (`search_param`); an endpoint that refuses it answers
+    the plain search instead, and the pages it lists are what there is.
+    """
+    body = {"keyword": f"site:{path}", "location_code": 2840, "language_code": "en",
+            "device": "desktop", "depth": 100}
+    try:
+        return dfs.rows(dfs.SERP, {**body, "search_param": WEEK})
+    except dfs.DfsError:
+        return dfs.rows(dfs.SERP, body)
+
+
 def google_new(c: dict) -> tuple[list[dict], int]:
     """Pages Google indexed in the last seven days under each path."""
-    out, cost = [], 0
+    out, cost, errors = [], 0, []
     for path in c["google_new"]:
-        data, spent = aisa.call([{"call_id": "g", "tool": SERP, "arguments": {"body": [{
-            "keyword": f"site:{path}", "location_code": 2840, "language_code": "en", "depth": 100, "search_param": "tbs=qdr:w"}]}}])
+        try:
+            rows, spent = _serp(path)
+        except dfs.DfsError as exc:
+            errors.append(f"{path}: {exc}")
+            continue
         cost += spent
-        res = ((((data.get("g") or {}).get("tasks") or [{}])[0].get("result") or [{}])[0]) or {}
-        for i in res.get("items") or []:
+        for i in rows:
             if i.get("type") == "organic" and i.get("url"):
                 name = re.split(r"\s+[|–—-]\s+", i.get("title") or "")[0]
                 out.append({"key": i["url"], "name": clean(name, 80), "url": i["url"], "about": clean(i.get("description") or ""),
                             "where": path, "fresh": True})                   # indexed in the last seven days
+    if errors:
+        raise PartialFailure(out, cost, errors)
     return out, cost
 
 
+def _words(payload: dict, keys: tuple[str, ...], field: str) -> list[str]:
+    """The words a TikHub answer holds under `keys`, in the field it names them by."""
+    rows: list = []
+    for k in keys:
+        rows += payload.get(k) or (payload.get("data") or {}).get(k) or []
+    return [str(r.get(field) or "").strip() for r in rows if isinstance(r, dict)]
+
+
 TRENDING = {
-    "douyin": ("get_tikhub_douyin_app_v3_fetch_hot_search_list", {}, lambda d: [w.get("word") for k in ("word_list", "trending_list")
-                                                                                 for w in (d.get("data") or {}).get(k) or []]),
-    "tiktok": ("get_tikhub_tiktok_web_fetch_trending_searchwords", {}, lambda d: [w.get("trendingSearchWord") for w in d.get("trending_search_words") or []]),
-    "tiktok_tags": ("post_tikhub_tiktok_ads_get_trends_hashtag_list", {"country_code": "US", "time_range": 7, "limit": 50},
-                    lambda d: [w.get("hashtagName") for w in d.get("items") or []]),
-    "reddit": ("get_tikhub_reddit_app_fetch_trending_searches", {"need_format": True},
-               lambda d: [w.get("displayQuery") for w in d.get("trendingQueries") or []]),
+    "douyin": ("/api/v1/douyin/app/v3/fetch_hot_search_list", {},
+               lambda d: _words(d, ("word_list", "trending_list"), "word")),
+    "tiktok": ("/api/v1/tiktok/web/fetch_trending_searchwords", {},
+               lambda d: _words(d, ("trending_search_words",), "trendingSearchWord")),
+    "tiktok_tags": ("/api/v1/tiktok/ads/get_trends_hashtag_list", {"country_code": "US", "time_range": 7, "limit": 50},
+                    lambda d: _words(d, ("items",), "hashtagName")),
+    "reddit": ("/api/v1/reddit/app/fetch_trending_searches", {},
+               lambda d: _words(d, ("trendingQueries",), "displayQuery")),
 }
 
 
 def trending(c: dict) -> tuple[list[dict], int]:
-    calls = [{"call_id": k, "tool": TRENDING[k][0], "arguments": TRENDING[k][1]} for k in c["trending"]]
-    data, cost = aisa.call(calls)
-    out = []
+    """Trending searches and hashtags: TikHub through Monid, about $0.001 a list."""
+    out, cost, errors = [], 0, []
     for k in c["trending"]:
-        words = TRENDING[k][2](((data.get(k) or {}).get("data")) or {})
+        endpoint, params, words_of = TRENDING[k]
+        try:
+            answer, spent = monid.run("tikhub", endpoint, query=params)
+        except monid.MonidError as exc:
+            errors.append(f"{k}: {exc}")
+            continue
+        cost += spent
+        payload = answer.get("data") if isinstance(answer, dict) and isinstance(answer.get("data"), dict) else answer
+        words = words_of(payload) if isinstance(payload, dict) else []
         out += [{"key": f"{k}:{w}", "name": w[:80], "url": "", "about": "", "where": k, "fresh": True} for w in words if w and TOOLISH.search(w)]
+    if errors:
+        raise PartialFailure(out, cost, errors)
     return out, cost
 
 
 def rising(c: dict) -> tuple[list[dict], int]:
-    """The rising searches next to each root word ("ai generator", "ai detector" ...): GoAnyAPI Trends, 6 credits a seed,
-    four seeds at a time."""
+    """The rising searches next to each root word ("ai generator", "ai detector" ...):
+    Google Trends' related queries for each seed, read through DataForSEO and Monid
+    (radar/google.py). A seed whose call failed simply brings nothing."""
     out, cost = [], 0
-    with ThreadPoolExecutor(4) as pool:
-        answers = list(pool.map(goanyapi.related_queries, c["seeds"]))
-    for seed, (groups, spent) in zip(c["seeds"], answers):
-        cost += spent
+    groups, spent, failed = google.related_queries(c["seeds"], c.get("related_geo", "US"))
+    cost += spent
+    for seed in c["seeds"]:
         head = [w for w in seed.split() if w != "ai"] or seed.split()
         # Trends answered "ai generator" with "best pizza near me" and "how to bake a cake" on 2026-10-15: a rising
         # search that does not share the seed's word is the day's general news, not something people build tools for
-        out += [{"key": q, "name": q, "url": "", "about": "", "where": seed, "fresh": True} for q in groups.get("rising", [])
+        out += [{"key": q, "name": q, "url": "", "about": "", "where": seed, "fresh": True} for q in groups.get(seed, {}).get("rising", [])
                 if q != seed and any(w in q.split() for w in head)]
+    if failed:
+        raise PartialFailure(out, cost, failed)
     return out, cost
 
 
@@ -203,7 +249,10 @@ def feeds(cfg: dict, state: Path, today: date | None = None, weekly: bool = Fals
             continue
         try:
             items, cost = FEEDS[name](c)
-        except (OSError, ValueError, KeyError, TypeError, aisa.AisaError, goanyapi.GoAnyError) as exc:
+        except PartialFailure as exc:
+            items, cost = exc.rows, exc.cost       # what came in is kept; the failures are named
+            out["errors"] += [f"{name}: {e[:120]}" for e in exc.errors]
+        except (OSError, ValueError, KeyError, TypeError, dfs.DfsError, monid.MonidError) as exc:
             out["errors"].append(f"{name}: {str(exc)[:120]}")
             continue
         out["cost_micros"] += cost

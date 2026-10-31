@@ -2,7 +2,8 @@
 
 A word that catches on gets sites built for it: ai-hailuo.com was registered in August
 2026 for the Hailuo video model and ranked for 258 keywords within weeks. DataForSEO's
-domain whois overview (through AIsa's REST passthrough) finds such domains: registered AND first seen by
+domain whois overview (through Monid, and through AIsa's REST passthrough when Monid's
+answer does not come back) finds such domains: registered AND first seen by
 DataForSEO within `window_days`, with estimated organic traffic over `min_etv` and at
 least `min_keywords` ranking keywords. Both dates are needed: whois creation dates get
 rewritten (dagbladet.no, a 2020 site, showed a July 2026 "created"). The keyword floor
@@ -22,11 +23,11 @@ import re
 from datetime import date, timedelta
 from pathlib import Path
 
-from . import aisa, site_words, snap
+from . import dfs, site_words, snap
 from .i18n import t
 from .terms import STOP
 
-PATH = "domain_analytics/whois/overview/live"      # through AIsa's REST passthrough: the router refuses these filters
+PATH = dfs.WHOIS              # DataForSEO's domain whois: the filters the router refuses go through AIsa's REST passthrough
 LIMIT = 30
 DOMAIN_STOP = {"com", "net", "org", "app", "io", "co", "online", "free", "tool", "tools", "the", "my", "get",
                "official", "site", "hub", "pro", "best", "video", "videos"}
@@ -65,16 +66,17 @@ def new_sites(cfg: dict, state: Path, today: date | None = None) -> dict:
     cost, answered, errors = 0, 0, []
     for name, pattern in c["queries"].items():
         try:
-            result, spent = aisa.rest(PATH, _task(c, today, pattern))
-        except aisa.AisaError as exc:
+            items, spent = dfs.rows(PATH, _task(c, today, pattern))
+        except dfs.DfsError as exc:
             errors.append(f"{name}: {exc}")
             continue
         cost, answered = cost + spent, answered + 1
-        for item in result.get("items") or []:
-            if keep(item, c["min_etv"], c["min_keywords"]) and item["domain"] not in sites:
-                sites[item["domain"]] = site_row(item, name)
+        for item in items:
+            domain = item.get("domain")
+            if domain and keep(item, c["min_etv"], c["min_keywords"]) and domain not in sites:
+                sites[domain] = site_row(item, name)
     if errors and not answered:
-        raise aisa.AisaError("; ".join(errors)[:300])
+        raise dfs.DfsError("; ".join(errors)[:300])
     path = state / "new_sites.json.gz"
     seen: dict[str, str] = snap.load(path) or {}
     rows = sorted(sites.values(), key=lambda r: -r["etv"])

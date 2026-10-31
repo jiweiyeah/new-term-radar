@@ -6,14 +6,17 @@
 Three tools:
   recent_leads   what the radar has kept, with review verdicts and hit rates. Free, instant.
   keyword_table  the generic terms behind names you give it, sized, with a decision each.
-                 Paid (about $0.05 a name plus $0.09 a call) and slow: 40 to 90 seconds a name.
+                 Paid (about $0.70 a call for one or two names, $1.05 for five; most of it the
+                 markets reading, $0.43 a call whatever the number of names) and slow: 40 to 90
+                 seconds a name.
   run_radar      one `sources` or `daily` run, returning its report. Paid, and takes minutes:
                  meant for a first try, the schedule belongs in cron or GitHub Actions.
 
 Where it looks: RADAR_CONFIG (default ./config.json, or the example the radar ships with when
 there is none) and RADAR_STATE (default ./state), the same files the command line uses, so the
-server sees what the scheduled runs kept. Keys come from the environment: AISA_API_KEY, and
-optionally GOANYAPI_API_KEY.
+server sees what the scheduled runs kept. Keys come from the environment: MONID_API_KEY and
+OPENAI_API_KEY (the model gateway), and optionally AISA_API_KEY (the second door for Google's
+own numbers).
 
 The transport is stdio, so nothing here may print to stdout: the tools run the radar with
 its output captured. A tool that fails reaches the agent as a ToolError with its reason (no key,
@@ -31,6 +34,7 @@ from pathlib import Path
 
 from . import __main__ as cli
 from . import config
+from . import secrets
 
 try:                                   # mcp 2.x
     from mcp.server.mcpserver import MCPServer
@@ -80,7 +84,9 @@ def recent_leads(days: int = 7) -> dict:
 
 def _keyword_table(names: list[str], repos: dict[str, str]) -> dict:
     cfg_path, state = _paths()
-    uc, text = _quiet(cli.keyword_table, config.load(cfg_path), state, names, repos)
+    cfg = config.load(cfg_path)
+    secrets.load_env(cfg["_dir"] / ".env")   # the data keys, as the command line does
+    uc, text = _quiet(cli.keyword_table, cfg, state, names, repos)
     return {"table_markdown": text, "rows": uc.get("rows", []), "incomplete": cli.usecases.degraded(uc),
             "cost_usd": round(uc.get("cost_micros", 0) / 1e6, 3)}
 
@@ -92,9 +98,10 @@ async def keyword_table(names: list[str], repos: dict[str, str] | None = None) -
     what it is doing now, and prioritize / watch / skip.
 
     names: one or two is best, eight at most. repos: optional {"name": "owner/repo"} so the
-    README is read as evidence. Paid: about $0.05 a name plus $0.09 a call. Slow: 40 to 90
-    seconds a name. `incomplete` is true when a data source failed and the table holds less
-    than it should; the lines under the table say which."""
+    README is read as evidence. Paid: about $0.70 a call for one or two names, $1.05 for five
+    (most of it the markets reading, $0.43 a call whatever the number of names). Slow: 40 to
+    90 seconds a name. `incomplete` is true when a data source failed and the table holds
+    less than it should; the lines under the table say which."""
     return await asyncio.to_thread(_keyword_table, names, repos or {})
 
 
@@ -113,9 +120,9 @@ async def run_radar(command: str = "sources", skip: list[str] | None = None) -> 
     no report when nothing is new) or "daily" (every signal, the keyword table, the 14-day
     review). skip: any of x, hf, breakout, sitemaps, newsites, gsc, review, judge, usecases.
 
-    Paid and slow: `sources` reads every X account in config.json (about 10 seconds and $0.003
-    each); `daily` takes 5 to 15 minutes. It updates the same state the scheduled runs use, so
-    do not call it as a substitute for the schedule."""
+    Paid and slow: `sources` reads every X account in config.json (about 10 seconds and $0.002
+    each); `daily` takes 5 to 15 minutes and about $1.20 with the example config. It updates
+    the same state the scheduled runs use, so do not call it as a substitute for the schedule."""
     if command not in ("sources", "daily"):
         raise ValueError('command must be "sources" or "daily"')
     return await asyncio.to_thread(_run, command, skip or [])

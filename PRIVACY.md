@@ -9,11 +9,13 @@ Free, with no key:
 - Hugging Face's trending models and Spaces (`huggingface.co`)
 - GitHub's repository search and READMEs (`api.github.com`). A `GITHUB_TOKEN`, if you set one, goes only to GitHub and only raises the rate limit.
 - the sitemaps listed in your `config.json` (the example config lists twelve AI tool, MCP and skill directories)
+- the domains' own `ads.txt` files, the registry's RDAP answer, the Chrome Web Store's own pages and Disboard's own search: which ad publisher IDs a site shares with others, when a domain was registered, the low-star reviews of an extension, and how many Discord servers carry a name
 
 Through the providers whose keys you set. A request carries what the radar is looking up or judging (X account names, terms and names, and the public posts and pages they came from) and nothing else from your machine:
 
-- AIsa (`tools.aisa.one`, `api.aisa.one`), with `AISA_API_KEY`, or the key the AIsa CLI stored at login: X posts, Reddit and YouTube searches, Google Ads volumes, DataForSEO Trends, domain data, and the model that judges which terms are names
-- GoAnyAPI (`api.goanyapi.com`), with `GOANYAPI_API_KEY`: related queries, one country's Trends series, searches, and Chrome Web Store reviews
+- Monid (`api.monid.ai`), with `MONID_API_KEY`: X posts and searches, Reddit and YouTube reads, Google Ads volumes, DataForSEO Trends, domain data, the ratings of the sites on page one, the traffic of a new seller, the advertisers of a name, and (when the model gateway does not answer) the model calls
+- the model gateway, with `OPENAI_API_KEY`: the model's calls, at the address in `OPENAI_BASE_URL` (by default `https://api.y-api.bestvirtualgoods.com/v1`): the terms and names being judged, the posts and pages they came from, and the instructions that ask for the answer
+- AIsa (`tools.aisa.one`, `api.aisa.one`), with `AISA_API_KEY`, or the key the AIsa CLI stored at login: the DataForSEO readings (the searches, the Trends, the volumes, the difficulties), the door that answers when Monid's answer does not come back. The model calls never go there. The site ratings, a seller's traffic and the AdSense portfolios are Monid's alone
 - TrustMRR (`trustmrr.com`), with `TRUSTMRR_API_KEY`: verified revenue listings
 - Google Search Console (`googleapis.com`), with your own Google token: the queries your own site got
 - Resend (`api.resend.com`), with `RESEND_API_KEY`: only to email the report, to the addresses you put in `RADAR_EMAIL_TO`

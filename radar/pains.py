@@ -1,13 +1,14 @@
 """What people complain about: the gaps a new tool can fill.
 
 `python -m radar pains "<keyword>"` reads, for a kind of tool:
-- low-star Chrome Web Store reviews (1 to `max_stars`) of the extensions Google shows for the
-  keyword (GoAnyAPI: a site search, 2 credits; reviews, 3 credits a page), or of the ones you name;
-- Reddit posts that complain about the job or the tools for it (AIsa, $0.0019 a query);
-- comments under the top tutorial videos for it (AIsa, $0.001 a page of 20);
-and a small model groups them into the gaps they point at: what the tools fail to do, what is
-too hard, too slow or too dear, what people wish existed. Each gap has a count, quotes and the
-phrase someone with that problem would search.
+- low-star Chrome Web Store reviews (1 to `max_stars`) of the extensions the store itself
+  lists for the keyword (its own search, free; the reviews are the store's own, free), or
+  of the ones you name;
+- Reddit posts that complain about the job or the tools for it (Monid, $0.00035 a query);
+- comments under the top tutorial videos for it (Monid, $0.0012 a page of 20);
+and a small model (through Monid) groups them into the gaps they point at: what the tools
+fail to do, what is too hard, too slow or too dear, what people wish existed. Each gap has
+a count, quotes and the phrase someone with that problem would search.
 
 The daily run does the tutorial part for the leads marked ⚡ (a widely shared walkthrough of a
 manual workflow): what its viewers ask for is the one-click tool.
@@ -23,9 +24,8 @@ import re
 import urllib.parse
 import urllib.request
 
-from . import UA, aisa, goanyapi, social
+from . import UA, aisa, cws, dfs, google, llm, monid, net, social
 
-EXTENSION = re.compile(r"(?:chromewebstore\.google\.com/detail|chrome\.google\.com/webstore/detail)/(?:[^/?#]+/)?([a-p]{32})")
 VIDEO = re.compile(r"youtube\.com/watch\?v=([\w-]{11})")
 MAX_ITEMS = 120
 SYSTEM = (
@@ -62,31 +62,33 @@ def group(model: str, items: list[dict]) -> list[dict]:
     if not items:
         return []
     user = json.dumps([{"i": i, "source": x["source"], "text": x["text"][:300]} for i, x in enumerate(items)], ensure_ascii=False)
-    return parse(aisa.chat(model, SYSTEM, user, max_tokens=2500), items)
+    return parse(llm.chat(model, SYSTEM, user, max_tokens=2500), items)
 
 
 def chrome(keyword: str, extensions: list[str], c: dict) -> tuple[list[dict], int, list[str]]:
-    """Low-star reviews of the given extensions, or of those Google shows for the keyword."""
+    """Low-star reviews of the given extensions, or of those the store lists for the keyword."""
     items, cost, errors = [], 0, []
     if not extensions:
         try:
-            found, cost = goanyapi.serp(f"site:chromewebstore.google.com {keyword}")
-            extensions = list(dict.fromkeys(m.group(1) for r in found for m in [EXTENSION.search(r["url"])] if m))
-        except goanyapi.GoAnyError as exc:
+            # The store's own search, not a search engine: it knows which extensions carry
+            # the keyword, and Google's index of the store is thin and slow to answer.
+            extensions = cws.search(keyword, limit=c["extensions"])
+        except cws.CwsError as exc:
             return [], 0, [f"extension search: {exc}"]
     for ext in extensions[:c["extensions"]]:
-        cursor = ""
-        for _ in range(c["review_pages"]):
+        try:
+            handle = cws.page(ext)
+        except cws.CwsError as exc:
+            errors.append(f"reviews of {ext}: {exc}")
+            continue
+        for stars in range(1, c["max_stars"] + 1):
             try:
-                rows, cursor, spent = goanyapi.chrome_reviews(ext, cursor)
-            except goanyapi.GoAnyError as exc:
+                rows = cws.reviews(handle, stars=stars, limit=c["review_pages"] * 50)
+            except cws.CwsError as exc:
                 errors.append(f"reviews of {ext}: {exc}")
                 break
-            cost += spent
             items += [{"source": "chrome", "text": r["text"], "rating": r["rating"], "url": f"https://chromewebstore.google.com/detail/{ext}"}
                       for r in rows if r["text"] and (r["rating"] or 5) <= c["max_stars"]]
-            if not cursor:
-                break
     return items, cost, errors
 
 
@@ -95,7 +97,7 @@ def reddit(keyword: str, c: dict) -> tuple[list[dict], int, list[str]]:
     for template in c["reddit_queries"]:
         try:
             posts, spent = social.reddit(template.format(k=keyword), time=c["reddit_time"], sort="relevance", limit=25)
-        except aisa.AisaError as exc:
+        except (aisa.AisaError, monid.MonidError) as exc:
             errors.append(f"reddit: {exc}")
             continue
         cost += spent
@@ -107,19 +109,20 @@ def reddit(keyword: str, c: dict) -> tuple[list[dict], int, list[str]]:
 
 
 def tutorials(term: str, c: dict) -> tuple[list[dict], int, list[str]]:
-    """Comments under the top tutorial videos for a term (needs GoAnyAPI to find the videos)."""
-    if not goanyapi.key():
-        return [], 0, []
+    """Comments under the top tutorial videos for a term."""
     try:
-        found, cost = goanyapi.serp(f"site:youtube.com {term} tutorial")
-    except goanyapi.GoAnyError as exc:
+        # As with the extensions: Google's `site:` operator hides the real address behind its
+        # own redirect, so YouTube is asked for by name and picked out here.
+        out, cost = google.serp(f"{term} tutorial youtube")
+    except dfs.DfsError as exc:
         return [], 0, [f"video search: {exc}"]
-    ids = list(dict.fromkeys(m.group(1) for r in found for m in [VIDEO.search(r["url"])] if m))[:c["videos"]]
+    ids = list(dict.fromkeys(m.group(1) for r in google.organic(out["items"])
+                             for m in [VIDEO.search(r["url"])] if m))[:c["videos"]]
     items, errors = [], []
     for vid in ids:
         try:
             comments, spent = social.youtube_comments(vid)
-        except aisa.AisaError as exc:
+        except (aisa.AisaError, monid.MonidError) as exc:
             errors.append(f"comments of {vid}: {exc}")
             continue
         cost += spent
@@ -136,14 +139,14 @@ def appstore(keyword: str, c: dict) -> tuple[list[dict], int, list[str]]:
         return [], 0, []
     try:
         url = "https://itunes.apple.com/search?" + urllib.parse.urlencode({"term": keyword, "entity": "software", "limit": c["apps"]})
-        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": UA}), timeout=30) as res:
+        with net.fetch(urllib.request.Request(url, headers={"User-Agent": UA}), 30) as res:
             apps = json.load(res).get("results", [])
     except (OSError, ValueError) as exc:
         return [], 0, [f"app search: {str(exc)[:100]}"]
     for app in apps:
         url = f"https://itunes.apple.com/us/rss/customerreviews/id={app['trackId']}/sortBy=mostRecent/json"
         try:
-            with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": UA}), timeout=30) as res:
+            with net.fetch(urllib.request.Request(url, headers={"User-Agent": UA}), 30) as res:
                 entries = json.load(res).get("feed", {}).get("entry", [])
         except (OSError, ValueError) as exc:
             errors.append(f"reviews of {app.get('trackName')}: {str(exc)[:80]}")
@@ -159,13 +162,13 @@ def appstore(keyword: str, c: dict) -> tuple[list[dict], int, list[str]]:
 def run(cfg: dict, keyword: str, extensions: list[str] | None = None) -> dict:
     """The pain points for a kind of tool, from reviews, Reddit and tutorial comments."""
     c, items, cost, errors = cfg["pains"], [], 0, []
-    for fn in (lambda: chrome(keyword, list(extensions or []), c) if goanyapi.key() or extensions else ([], 0, ["no GOANYAPI_API_KEY: Chrome reviews skipped"]),
+    for fn in (lambda: chrome(keyword, list(extensions or []), c),
                lambda: reddit(keyword, c), lambda: tutorials(keyword, c), lambda: appstore(keyword, c)):
         got, spent, failed = fn()
         items, cost, errors = items + got, cost + spent, errors + failed
     try:
         gaps = group(c["model"], items)
-    except aisa.AisaError as exc:
+    except monid.MonidError as exc:
         gaps, errors = [], errors + [f"model: {exc}"]
     by = {s: sum(1 for x in items if x["source"] == s) for s in ("chrome", "reddit", "youtube", "appstore")}
     return {"keyword": keyword, "items": len(items), "by_source": by, "gaps": gaps, "errors": errors, "cost_micros": cost}
@@ -180,7 +183,7 @@ def tutorial_asks(cfg: dict, leads: list[dict]) -> dict:
         cost, errors = cost + spent, errors + failed
         try:
             gaps = group(c["model"], items)
-        except aisa.AisaError as exc:
+        except monid.MonidError as exc:
             gaps, errors = [], errors + [f"model: {exc}"]
         if gaps:
             out.append({"term": lead["term"], "comments": len(items), "gaps": gaps[:5]})

@@ -4,22 +4,23 @@
   python -m radar sources  [--config config.json] [--state state] [--out sources.md] [--mail] [--feishu]
 
 Signals:
-  ① x         names the accounts you follow said for the first time (AIsa)
+  ① x         names the accounts you follow said for the first time (Monid)
   ① hf        models new to Hugging Face's trending top 50
   ② breakout  one new GitHub repo taking off on its own
   ③ sitemaps  pages other sites added since the last run
-  ③ newsites  domains registered in the last 90 days that already rank (weekly; AIsa)
+  ③ newsites  domains registered in the last 90 days that already rank (weekly; Monid)
   ⑥ revenue   products people pay for, growing fastest or newly listed (weekly; TrustMRR key)
-  ⑦ asks      what people ask for on Reddit ("is there an AI tool that…"), sized (weekly; AIsa)
-  ⑧ sellers   sites that just put up a payment link: Stripe, Polar, Lemon Squeezy, Gumroad, Creem, Paddle (weekly; AIsa)
-  ⑧ builders  sites just built with Lovable or v0, newsletters just started on beehiiv (weekly; AIsa)
+  ⑦ asks      what people ask for on Reddit ("is there an AI tool that…"), sized (weekly; Monid)
+  ⑧ sellers   sites that just put up a payment link: Stripe, Polar, Lemon Squeezy, Gumroad, Creem, Paddle (weekly; Monid)
+  ⑧ builders  sites just built with Lovable or v0, newsletters just started on beehiiv (weekly; Monid)
   ⑨ feeds     just listed: Product Hunt, Show HN, OpenRouter, Civitai, App Store grossing, awesome lists,
               Google's new pages under Figma / There's An AI For That / Chrome Web Store, trending searches,
               rising searches next to root words (daily; the paid ones weekly)
-  ⑩ money     the other sites of a paying product's AdSense account; new advertisers on your terms (weekly; GoAnyAPI)
+  ⑩ money     the other sites of a paying product's AdSense account; new advertisers on your terms (weekly;
+              the AdSense portfolios need Monid)
   ④ gsc       queries your own site got impressions for, for the first time (optional)
-  ⑤ review    leads from 14 days ago checked in DataForSEO Trends; hit rate per signal (AIsa)
-  usecases    the generic terms behind today's names, sized against a benchmark keyword (AIsa)
+  ⑤ review    leads from 14 days ago checked in DataForSEO Trends; hit rate per signal (Monid)
+  usecases    the generic terms behind today's names, sized against a benchmark keyword (Monid)
 
   python -m radar keywords "name one" "name two" [--repo "name one=owner/repo"] [--json]
   python -m radar leads    [--days 7] [--json]
@@ -51,7 +52,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from . import aisa, asks, breakout, config, feeds, gsc, money, new_sites, notify, pains, report, review, revenue, seller_history, sellers, \
-    sidelights, sitemaps, sources, store, usecases
+    secrets, sidelights, sitemaps, sources, store, usecases
 from .i18n import t
 
 SKIPPABLE = {"x", "hf", "breakout", "sitemaps", "newsites", "revenue", "asks", "sellers", "gsc", "review", "judge", "usecases", "tutorials",
@@ -301,6 +302,7 @@ def main(argv: list[str] | None = None) -> int:
         cfg["judge"]["model"] = ""
     if args.command in {"daily", "sources"}:
         notify.load_env(cfg["_dir"] / ".env")
+    secrets.load_env(cfg["_dir"] / ".env")   # the data keys: Monid, AIsa, TrustMRR, GitHub
     state.mkdir(parents=True, exist_ok=True)
     aisa.set_key_ledger(state / "aisa_keys.json")
     if args.command == "keywords":

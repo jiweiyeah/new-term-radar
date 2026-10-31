@@ -17,7 +17,8 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import UA
+from . import UA, net
+from . import secrets
 
 # Inline styles: Gmail drops a <style> block that sits outside <head>, which leaves
 # tables unbordered with centred headers. Every tag carries its own.
@@ -45,19 +46,8 @@ def load_env(path: Path) -> None:
     Blank lines and comments are ignored; export and surrounding quotes are allowed.
     Explicit environment settings (even empty ones) always take precedence.
     """
-    if not path.is_file():
-        return
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[7:].lstrip()
-        key, sep, value = line.partition("=")
-        key, value = key.strip(), value.strip()
-        if sep and key in ENV_KEYS:
-            if len(value) >= 2 and value[0] in "\"'" and value[-1] == value[0]:
-                value = value[1:-1]
+    for key, value in secrets.read_env(path).items():
+        if key in ENV_KEYS:
             os.environ.setdefault(key, value)
 
 
@@ -96,7 +86,7 @@ def send(subject: str, md_text: str) -> str:
     req = urllib.request.Request("https://api.resend.com/emails", data=body, method="POST", headers={
         "Authorization": f"Bearer {os.environ['RESEND_API_KEY']}", "Content-Type": "application/json", "User-Agent": UA})
     try:
-        with urllib.request.urlopen(req, timeout=30) as res:
+        with net.fetch(req, 30) as res:
             return f"mail sent ({res.status})"
     except urllib.error.HTTPError as exc:
         raise SystemExit(f"Resend {exc.code}: {exc.read().decode('utf-8', 'replace')[:300]}") from exc
@@ -160,7 +150,7 @@ def send_feishu(subject: str, md_text: str) -> str:
         req = urllib.request.Request(webhook, data=body, method="POST", headers={
             "Content-Type": "application/json; charset=utf-8", "User-Agent": UA})
         try:
-            with urllib.request.urlopen(req, timeout=30) as res:
+            with net.fetch(req, 30) as res:
                 result = json.loads(res.read())
             if not isinstance(result, dict):
                 return f"feishu failed ({i}/{len(messages)}): invalid response"

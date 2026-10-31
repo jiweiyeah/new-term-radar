@@ -4,23 +4,23 @@ Rising is not enough: a term whose first page is held by strong sites is a fight
 loses. For the table's rows that would be acted on (prioritize, then watch), up to `max_rows`
 a run, this reads:
 
-- Google's first page (DataForSEO through AIsa, about $0.002 a keyword): what kinds of pages
+- Google's first page (DataForSEO through Monid, about $0.002 a keyword): what kinds of pages
   hold it, and whether ads show (someone pays for that click: there is money in the term);
-- the rating of each site there (GoAnyAPI, $0.002 a site, kept 30 days): `weak` counts the
+- the rating of each site there (Ahrefs through Monid, about $0.0013 a site, kept 30 days): `weak` counts the
   results on sites rated under 30, the slots a new site can take, and the weakest one is named;
 - from the same page, what else holds it besides the ten results (`features`: an AI overview,
   an answer box, a forums block, videos, news) and the forum threads there (`forums`): an AI
   overview takes clicks, and a thread on page one is where an answer reaches the searchers;
 - keyword difficulty (DataForSEO Labs, about $0.012 a call; often missing for a new term);
-- with a GoAnyAPI key, who already builds for the term and who pays for it: how many pages
-  Google holds with the term in their title from the last month (`built`, 4 credits) and the
-  domains running Google ads on it (`paid`, Ads transparency, 4 credits).
+- who already builds for the term and who pays for it: how many pages Google holds with
+  the term in their title (`built`, Google's own count of an `intitle:` search, one more
+  search) and the domains running Google ads on it (`paid`, the ads on the page one, free).
 
 `open`: three or more weak results, or difficulty under 20. `crowded`: no weak result and a
 difficulty of 40 or more, or unknown. `mixed` in between. A term that first drew searches in
 the last half year (radar/wordage.py, `is_new`) is read one step easier (crowded -> mixed,
 mixed -> open): difficulty scores and ratings lag a new term. A crowded `prioritize` becomes
-`watch`: still rising, but page one belongs to strong sites. Without a GoAnyAPI key there are
+`watch`: still rising, but page one belongs to strong sites. Without a Monid key there are
 no ratings and only the difficulty speaks. In a name's first week page one is still forming
 (news, the maker's own pages): read it again at the second reading.
 """
@@ -31,10 +31,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from pathlib import Path
 
-from . import aisa, goanyapi, page_age, snap
+from . import dfs, google, monid, page_age, snap
 
-SERP_TOOL = "post_dataforseo_serp_google_organic_live"
-KD_TOOL = "post_dataforseo_labs_google_keyword_overview_live"
 DR_DAYS = 30
 WORKERS = 4                 # ratings asked at once
 VIDEO = ("youtube.com", "tiktok.com", "vimeo.com")
@@ -68,29 +66,43 @@ def threads(results: list[dict], items: list[dict]) -> list[dict]:
 
 
 def page_one(keyword: str, location: int, language: str = "en", device: str = "desktop") -> tuple[dict, int]:
-    """{"results": [{"domain", "url", "title", "position", "kind"}], "ads", "features", "forums"} and the cost."""
-    data, cost = aisa.call([{"call_id": "serp", "tool": SERP_TOOL, "arguments": {"body": [{
-        "keyword": keyword, "location_code": location, "language_code": language, "device": device, "depth": 10}]}}])
-    items = (((data.get("serp") or {}).get("tasks") or [{}])[0].get("result") or [{}])[0].get("items") or []
+    """{"results": [{"domain", "url", "title", "position", "kind"}], "ads", "ads_domains",
+    "features", "forums"} and the cost."""
+    out, cost = google.serp(keyword, location, language, device)
+    items = out["items"]
     results = [{"domain": re.sub(r"^www\.", "", i.get("domain") or ""), "url": i.get("url") or "", "title": i.get("title") or "",
                 "position": i.get("rank_group")} for i in items if i.get("type") == "organic"][:10]
     for r in results:
         r["kind"] = page_kind(r["domain"], r["url"], r["title"])
     return {"results": results, "ads": any(i.get("type") == "paid" for i in items),
+            "ads_domains": google.advertisers(items),
             "features": sorted({i["type"] for i in items if i.get("type") not in ("organic", "paid")}),
             "forums": threads(results, items)}, cost
 
 
+def _kd(row: dict) -> int | None:
+    """One keyword's difficulty: the bulk endpoint carries it on the row itself, the Labs
+    overview (the second door) nests it under `keyword_properties`."""
+    value = row.get("keyword_difficulty")
+    if value is None:
+        value = (row.get("keyword_properties") or {}).get("keyword_difficulty")
+    return value
+
+
 def difficulty(keywords: list[str], location: int, language: str = "en") -> tuple[dict[str, int | None], int]:
-    data, cost = aisa.call([{"call_id": "kd", "tool": KD_TOOL, "arguments": {"body": [{
-        "keywords": keywords, "location_code": location, "language_code": language}]}}])
-    items = ((((data.get("kd") or {}).get("tasks") or [{}])[0].get("result") or [{}])[0].get("items") or [])
-    return {i["keyword"]: (i.get("keyword_properties") or {}).get("keyword_difficulty") for i in items}, cost
+    """{keyword: difficulty} for a list of keywords, and the cost.
+
+    The bulk endpoint answers with one row a keyword; the difficulty of a new term is
+    often missing, and then the keyword is left out of the answer.
+    """
+    rows, cost = dfs.rows(dfs.DIFFICULTY, {"keywords": keywords, "location_code": location,
+                                           "language_code": language})
+    return {r["keyword"]: _kd(r) for r in rows if r.get("keyword")}, cost
 
 
 def ratings(domains: list[str], state: Path) -> tuple[dict[str, int | None], int]:
-    """Domain rating per site from GoAnyAPI, kept DR_DAYS days in state/ratings.json.gz."""
-    if not goanyapi.key():
+    """Domain rating per site from Ahrefs (through Monid), kept DR_DAYS days in state/ratings.json.gz."""
+    if not monid.key():
         return {}, 0
     path = state / "ratings.json.gz"
     held = snap.load(path) or {}
@@ -98,38 +110,42 @@ def ratings(domains: list[str], state: Path) -> tuple[dict[str, int | None], int
     fresh = {d: v for d, v in held.items() if (today - date.fromisoformat(v["day"])).days < DR_DAYS}
     def one(d: str):
         try:
-            return d, *goanyapi.call("dr", domain=d)
-        except goanyapi.GoAnyError:
+            return d, *monid.data("ahrefs", "/site-explorer/domain-rating",
+                                  query={"target": d, "date": today.isoformat()})
+        except monid.MonidError:
             return d, None, 0
     cost = 0
     with ThreadPoolExecutor(WORKERS) as pool:
         for d, data, spent in pool.map(one, sorted(set(domains) - set(fresh))):
             cost += spent
-            if data is not None:
-                fresh[d] = {"dr": data.get("domain_rating"), "day": today.isoformat()}
+            if data is not None and data.get("domain_rating") is not None:
+                fresh[d] = {"dr": data["domain_rating"], "day": today.isoformat()}
     snap.save(path, fresh)
     return {d: v["dr"] for d, v in fresh.items()}, cost
 
 
-def supply(rows: list[dict]) -> tuple[int, list[str]]:
-    """Adds `built` (pages titled with the term this month) and `paid` (domains advertising on it)."""
-    if not goanyapi.key() or not rows:
-        return 0, []
+def supply(rows: list[dict], pages: dict[str, dict]) -> tuple[int, list[str]]:
+    """Adds `built` (pages titled with the term) and `paid` (domains advertising on it).
 
+    `paid` comes from the page one already read for the term, so it costs nothing more;
+    `built` is one more search: Google's own count of the results of an `intitle:` search.
+    """
     def one(r: dict):
-        out, cost, errors = {}, 0, []
-        for field, fn in (("built", goanyapi.intitle), ("paid", goanyapi.advertisers)):
-            try:
-                out[field], spent = fn(r["phrase"])
-                cost += spent
-            except goanyapi.GoAnyError as exc:
-                errors.append(f"{r['phrase']} ({field}): {exc}")
-        return r, out, cost, errors
+        page = pages.get(r["phrase"]) or {}
+        out = {"paid": page.get("ads_domains") or []}
+        try:
+            count, spent = google.intitle_count(r["phrase"])
+            out["built"] = count
+            return r, out, spent, ""
+        except dfs.DfsError as exc:
+            return r, out, 0, f"{r['phrase']} (built): {exc}"
     total, errors = 0, []
     with ThreadPoolExecutor(WORKERS) as pool:
-        for r, out, cost, errs in pool.map(one, rows):
+        for r, out, spent, error in pool.map(one, rows):
             r["competition"].update(out)
-            total, errors = total + cost, errors + errs
+            total += spent
+            if error:
+                errors.append(error)
     return total, errors
 
 
@@ -147,8 +163,11 @@ def verdict(weak: int | None, kd: int | None, new: bool = False) -> str:
     return EASIER[v] if new else v
 
 
-def assess(rows: list[dict], cfg: dict, state: Path) -> tuple[int, list[str]]:
-    """Adds `competition` to the rows that would be acted on and demotes a crowded prioritize. (cost, errors)"""
+def assess(rows: list[dict], cfg: dict, state: Path, known: dict[str, int] | None = None) -> tuple[int, list[str]]:
+    """Adds `competition` to the rows that would be acted on and demotes a crowded prioritize.
+
+    `known` is the difficulty already read for this market (the markets reading buys the
+    same rows from the same endpoint): it is not bought twice. (cost, errors)"""
     c = cfg["competition"]
     picked = [r for r in rows if r.get("decision") == "prioritize"] + [r for r in rows if r.get("decision") == "watch"]
     picked = picked[:c["max_rows"]]
@@ -159,14 +178,17 @@ def assess(rows: list[dict], cfg: dict, state: Path) -> tuple[int, list[str]]:
         try:
             pages[r["phrase"]], spent = page_one(r["phrase"], c["location_code"])
             cost += spent
-        except aisa.AisaError as exc:
+        except dfs.DfsError as exc:
             errors.append(f"{r['phrase']}: {exc}")
-    try:
-        kds, spent = difficulty([r["phrase"] for r in picked], c["location_code"])
-        cost += spent
-    except aisa.AisaError as exc:
-        kds = {}
-        errors.append(f"difficulty: {exc}")
+    kds = dict(known or {})
+    missing = [r["phrase"] for r in picked if r["phrase"] not in kds]
+    if missing:
+        try:
+            got, spent = difficulty(missing, c["location_code"])
+            cost += spent
+            kds.update(got)
+        except dfs.DfsError as exc:
+            errors.append(f"difficulty: {exc}")
     dr, spent = ratings([x["domain"] for p in pages.values() for x in p["results"]], state)
     cost += spent
     for r in picked:
@@ -197,5 +219,5 @@ def assess(rows: list[dict], cfg: dict, state: Path) -> tuple[int, list[str]]:
             page_age.record(picked, pages, state)
         except (OSError, ValueError) as exc:
             errors.append(f"page age: {exc}")
-    spent, failed = supply([r for r in picked if r.get("competition")])
+    spent, failed = supply([r for r in picked if r.get("competition")], pages)
     return cost + spent, errors + failed

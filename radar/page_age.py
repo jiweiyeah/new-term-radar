@@ -21,7 +21,7 @@ import urllib.request
 from datetime import date
 from pathlib import Path
 
-from . import UA, snap
+from . import UA, net, snap
 
 RDAP = "https://rdap.org/domain/"
 RDAP_GAP = 0.5          # seconds between RDAP requests: a burst is refused
@@ -50,7 +50,7 @@ def ask(domain: str) -> tuple[str, str]:
             time.sleep(max(0.0, _last[0] + RDAP_GAP - time.monotonic()))
             _last[0] = time.monotonic()
         try:
-            with urllib.request.urlopen(req, timeout=TIMEOUT) as res:
+            with net.fetch(req, TIMEOUT) as res:
                 events = json.load(res).get("events") or []
             day = next(((e.get("eventDate") or "")[:10] for e in events if e.get("eventAction") == "registration"), "")
             return (day, "ok") if day else ("", "none")

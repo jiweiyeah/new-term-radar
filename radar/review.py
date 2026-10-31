@@ -1,16 +1,17 @@
 """The radar's review: check every lead in DataForSEO Trends two weeks later.
 
 review()  takes up to `per_day` leads first seen `after_days` ago or earlier and not yet
-          checked, asks DataForSEO Trends (through AIsa) about each search variant, and
+          checked, asks DataForSEO Trends (through Monid) about each search variant, and
           stores hit / miss / no_data plus how many days the radar was ahead.
 
 Each variant is its own call: in one shared task the values share a 0-100 scale and a
-small term next to a big one reads 0, and the live endpoint runs only the first task of
-a request's body, so tasks cannot be batched into one call either. A variant "rose" when
-its peak after first_seen clears its own baseline (the mean before first_seen) by
-RISE_FACTOR and RISE_MIN; a word with an older meaning ("strata": strata rock, strata
-title) has a high baseline and does not rise, while "niko1221 strata" goes from 0 to
-something.
+small term next to a big one reads 0, and a Monid run takes one task, so the variants are
+asked one after the other. A variant "rose" when its peak after first_seen clears its own
+baseline (the mean before first_seen) by RISE_FACTOR and RISE_MIN; a word with an older
+meaning ("strata": strata rock, strata title) has a high baseline and does not rise, while
+"niko1221 strata" goes from 0 to something.
+
+A lead whose call failed stays due: the next run takes it again.
 
 This is verification, not discovery: it tells you which signals to trust.
 """
@@ -20,13 +21,12 @@ import sqlite3
 import statistics
 from datetime import date, timedelta
 
-from . import aisa, store
+from . import dfs, store
 
 BEFORE_DAYS = 30
-MAX_VARIANTS = 3      # each costs one Trends task ($0.0012 in October 2026)
+MAX_VARIANTS = 3      # each costs one Trends call ($0.011 in October 2026)
 RISE_FACTOR, RISE_MIN = 2.0, 10
 RISE_SHARE = 0.25     # the rise starts where a series first covers this share of base -> peak
-TOOL = "post_dataforseo_keywords_trends_explore_live"
 # Google has not settled the last two days of a daily series: they come back as 0 and
 # then 100 for unrelated terms ("ai image detector": ..., 5, 5, 0, 100 on 2026-10-12),
 # which reads as a rise. Every reader drops them (settled()).
@@ -67,26 +67,27 @@ def verdict(per_variant: dict[str, dict], first_seen: date) -> tuple[str, int | 
     return "miss", None
 
 
-def _series(task: dict) -> list[tuple[date, int]]:
-    try:
-        item = task["result"][0]["items"][0]
-    except (KeyError, IndexError, TypeError):
-        return []
-    return [(date.fromisoformat(p["date_from"]), int((p.get("values") or [0])[0] or 0)) for p in item.get("data", [])]
+def _series(result: dict) -> list[tuple[date, int]]:
+    """One Trends result's series: (day, value) a day, from the graph item."""
+    item = next((i for i in result.get("items") or [] if "graph" in str(i.get("type", ""))), {})
+    return [(date.fromisoformat(p["date_from"]), int((p.get("values") or [0])[0] or 0))
+            for p in item.get("data") or []]
 
 
 def plan_calls(due: list[tuple], today: date, after_days: int = 14) -> tuple[list[dict], list[tuple]]:
-    """One Trends call per search variant of each due lead, over its review window."""
-    calls, plan = [], []
-    for i, (term, first_seen, variants) in enumerate(due):
+    """One Trends body per search variant of each due lead, over its review window.
+
+    The bodies come back in the order they are planned, so a variant is found by its
+    place in the list."""
+    bodies, plan = [], []
+    for term, first_seen, variants in due:
         keys = (list(variants) or [term])[:MAX_VARIANTS]
         window = {"date_from": (first_seen - timedelta(days=BEFORE_DAYS)).isoformat(),
                   "date_to": min(first_seen + timedelta(days=after_days), today).isoformat()}
-        ids = [f"r{i}v{j}" for j in range(len(keys))]
-        calls += [{"call_id": cid, "tool": TOOL, "arguments": {"body": [{"keywords": [k], **window}]}}
-                  for cid, k in zip(ids, keys)]
+        ids = list(range(len(bodies), len(bodies) + len(keys)))
+        bodies += [{"keywords": [k], **window} for k in keys]
         plan.append((ids, term, first_seen, keys))
-    return calls, plan
+    return bodies, plan
 
 
 def review(cfg: dict, conn: sqlite3.Connection, today: date | None = None) -> dict:
@@ -95,13 +96,24 @@ def review(cfg: dict, conn: sqlite3.Connection, today: date | None = None) -> di
     due = store.due(conn, today, c["after_days"], c["per_day"])
     if not due:
         return {"checked": [], "cost_micros": 0, "after_days": c["after_days"]}
-    calls, plan = plan_calls(due, today, c["after_days"])
-    data, cost = aisa.call_all(calls)
+    bodies, plan = plan_calls(due, today, c["after_days"])
+    series, cost, failed, last = {}, 0, 0, ""
+    for i, body in enumerate(bodies):
+        try:
+            result, spent = dfs.result(dfs.TRENDS, body)
+        except dfs.DfsError as exc:
+            last = str(exc)
+            failed += 1
+            continue
+        series[i] = _series(result)
+        cost += spent
+    if bodies and failed == len(bodies):
+        raise dfs.DfsError(last)
     checked = []
     for ids, term, first_seen, keys in plan:
-        if not all(cid in data for cid in ids):
+        if not all(i in series for i in ids):
             continue   # stays due; the next run takes it again
-        per = {k: rose(settled(_series((data[cid].get("tasks") or [{}])[0]), today), first_seen) for cid, k in zip(ids, keys)}
+        per = {k: rose(settled(series[i], today), first_seen) for i, k in zip(ids, keys)}
         v, lead = verdict(per, first_seen)
         store.save_verdict(conn, term, v, lead, per, today)
         checked.append({"term": term, "first_seen": first_seen.isoformat(), "verdict": v, "lead_days": lead})

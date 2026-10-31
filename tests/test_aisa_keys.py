@@ -10,7 +10,7 @@ _REAL_POST = aisa._post   # conftest stubs _post per test (no network); capture 
 @pytest.fixture(autouse=True)
 def clean_state(monkeypatch):
     monkeypatch.setattr(aisa, "_ledger", None)
-    monkeypatch.setattr(aisa, "_dead_run", {"data": set(), "chat": set()})
+    monkeypatch.setattr(aisa, "_dead_run", {"data": set()})
     monkeypatch.setenv("AISA_API_KEY", "")
 
 
@@ -64,12 +64,11 @@ def test_all_keys_dead_raises_with_a_reset_hint(monkeypatch, tmp_path):
         aisa.key()
 
 
-def test_scopes_do_not_contaminate_each_other(monkeypatch, tmp_path):
-    """AIsa bills data and chat from separate wallets: a key out of model balance can still read X."""
-    with_keys(monkeypatch, tmp_path, "k1,k2")
-    aisa._mark_dead("k1", "chat")
-    assert aisa.key("data") == "k1"                    # still fine for data calls
-    assert aisa.key("chat") == "k2"
+def test_aisa_is_not_a_model_door(monkeypatch, tmp_path):
+    """AIsa bills one wallet for its router. The model's calls go to the OpenAI-compatible
+    gateway (radar/llm.py), so there is no chat scope here any more."""
+    assert aisa.SCOPES == ("data",)
+    assert not hasattr(aisa, "chat")
 
 
 # The router answers an invalid key with HTTP 200 and the refusal inside each result,
@@ -87,13 +86,53 @@ def test_body_level_refusal_is_read_from_the_results():
 
 
 def test_body_level_refusal_reads_the_message_when_status_is_missing():
+    body = _router_body(0, "insufficient_quota", False)
+    assert aisa._refused_status(body) == 402
+
+
+def test_an_empty_wallet_is_not_a_dead_key():
+    # The wallet belongs to the account, not to the key: an empty wallet says nothing about
+    # the key, and a top-up must make it work again without a manual reset.
+    body = _router_body(0, "insufficient wallet balance", False)
+    assert aisa._refused_status(body) is None
+
+
+def test_a_model_that_needs_a_top_up_is_not_a_dead_key():
+    # AIsa refuses a model that is not paid for with the same 402 as an empty wallet, but the
+    # key itself is fine: marking it dead would take every other model down with it.
     body = _router_body(0, "model gpt-4.1-mini requires a paid balance. recharge_required", False)
-    assert aisa._refused_status(body) == 402
+    assert aisa._refused_status(body) is None
 
 
-def test_chat_wallet_errors_are_a_refusal():
+def test_a_model_that_needs_a_top_up_does_not_kill_the_key(monkeypatch, tmp_path):
+    with_keys(monkeypatch, tmp_path, "k1")
+
+    def fake_send(url, body, timeout, k):
+        if body.get("model") == "paid-model":
+            raise aisa.AisaError("HTTP 402: model paid-model requires a paid balance.", 402)
+        return {"ok": True}
+    monkeypatch.setattr(aisa, "_send", fake_send)
+    with pytest.raises(aisa.AisaError, match="paid balance"):
+        aisa._attempt("https://x", {"model": "paid-model"}, 1, aisa._keys(), "data")
+    assert aisa._attempt("https://x", {"model": "free-model"}, 1, aisa._keys(), "data") == {"ok": True}
+    assert aisa._dead("data") == set()              # the key is still good
+
+
+def test_wallet_errors_are_not_a_dead_key():
     body = {"error": {"message": "insufficient wallet balance", "type": "invalid_request_error"}}
-    assert aisa._refused_status(body) == 402
+    assert aisa._refused_status(body) is None
+
+
+def test_an_empty_wallet_is_named_and_leaves_the_key_alive(monkeypatch, tmp_path):
+    with_keys(monkeypatch, tmp_path, "k1")
+    wallet = {"error": {"message": "insufficient wallet balance", "type": "invalid_request_error"}}
+
+    def fake_send(url, body, timeout, k):
+        return wallet
+    monkeypatch.setattr(aisa, "_send", fake_send)
+    with pytest.raises(aisa.AisaError, match="wallet is empty"):
+        aisa._attempt("https://x", {}, 1, aisa._keys(), "data")
+    assert aisa._dead("data") == set()              # the key is still good: a top-up brings it back
 
 
 def test_a_partly_successful_batch_is_not_a_refused_key():

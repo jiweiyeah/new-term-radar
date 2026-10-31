@@ -4,16 +4,19 @@ The signals surface whatever is new in the text they read: "Opus 5.5" and "Hyper
 but also "Lots", "Trained" and "voice notes". A small model reads each term with a few
 places it appeared and scores it from 0 to 1; the report leads with the names.
 
-One chat call per CHUNK terms through AIsa's OpenAI-compatible endpoint, the model set in
-config.json (judge.model). Without a key, or when the call fails, the terms keep no
-score and the report lists them all: the judge sorts the report, it never blocks it.
+One chat call per CHUNK terms through the model gateway (radar/llm.py), the model set in
+config.json (judge.model). The gateway names its models with the maker in front
+("openai/gpt-5.4-mini"), so the name the config asks for is looked up in the gateway's own
+list and the one that answers is remembered. Without a key, or when the call fails, the
+terms keep no score and the report lists them all: the judge sorts the report, it never
+blocks it.
 """
 from __future__ import annotations
 
 import json
 import re
 
-from . import aisa
+from . import llm
 
 CHUNK = 25
 SYSTEM = (
@@ -57,8 +60,8 @@ def score(rows: list[dict], model: str) -> dict:
         user = json.dumps([{"i": i, "term": r["term"], "examples": [e[:160] for e in r.get("examples", [])[:3]]}
                            for i, r in enumerate(chunk)], ensure_ascii=False)
         try:
-            scores = parse(aisa.chat(model, SYSTEM, user), len(chunk))
-        except aisa.AisaError as exc:
+            scores = parse(llm.chat(model, SYSTEM, user), len(chunk))
+        except llm.LlmError as exc:
             return {"judged": judged, "error": str(exc)[:160]}
         for i, s in scores.items():
             chunk[i]["named"] = s

@@ -27,7 +27,7 @@ import urllib.request
 from datetime import date
 from pathlib import Path
 
-from . import UA, snap
+from . import UA, net, snap
 from .i18n import t
 
 API = "https://trustmrr.com/api/v1/startups"
@@ -49,7 +49,7 @@ def fetch(sort: str, page: int, c: dict) -> list[dict]:
         params["category"] = c["category"]
     req = urllib.request.Request(f"{API}?{urllib.parse.urlencode(params)}", headers={
         "Authorization": f"Bearer {key()}", "User-Agent": UA, "Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=40) as res:
+    with net.fetch(req, 40) as res:
         return json.load(res).get("data") or []
 
 

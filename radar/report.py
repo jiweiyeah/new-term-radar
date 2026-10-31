@@ -235,7 +235,7 @@ def _money_lines(md: dict) -> list[str]:
         return []
     lines = ["", t("money_h"), ""]
     if md.get("no_key"):
-        return lines + [t("money_nokey")]
+        lines.append(t("money_nokey"))
     if md.get("portfolios"):
         lines += [t("money_folios")] + [t("money_folio_row", site=r["site"], pub=r["pub"], sisters=", ".join(r["sisters"][:8]))
                                         for r in md["portfolios"]]
@@ -636,8 +636,10 @@ def keyword_table(cfg: dict, uc: dict) -> list[str]:
         lines += [t("uc_degraded"), ""]
     lines += [t("uc_intro", names=", ".join(uc["names"]), proposed=uc["proposed"], relevant=uc["relevant"], kept=uc["kept"], min=c["min_volume"],
                 month=uc["volume_month"] or "?"),
-              t("uc_bench", bench=uc["benchmark"], bench_daily=uc["bench_daily"]) if uc.get("bench_daily") else t("uc_bench_none", bench=uc["benchmark"]), "",
-              t("uc_cols", bench=uc["benchmark"]), "|" + "---|" * 16]
+              t("uc_bench", bench=uc["benchmark"], bench_daily=uc["bench_daily"]) if uc.get("bench_daily") else t("uc_bench_none", bench=uc["benchmark"])]
+    if uc.get("model"):
+        lines.append(t("uc_model", model=uc["model"]))
+    lines += ["", t("uc_cols", bench=uc["benchmark"]), "|" + "---|" * 16]
     for r in uc["rows"]:
         generic = r["kind"] == "generic"
         none = r.get("no_data")
@@ -677,6 +679,8 @@ def keyword_table(cfg: dict, uc: dict) -> list[str]:
         lines += ["", t("uc_no_evidence", names=", ".join(uc["no_evidence"]))]
     if uc.get("posts_error"):
         lines += ["", t("uc_posts_err", why=uc["posts_error"])]
+    if uc.get("read_errors"):
+        lines += ["", t("uc_read_err", names="; ".join(uc["read_errors"]))]
     if uc.get("related_errors"):
         lines += ["", t("uc_related_err", names="; ".join(uc["related_errors"]))]
     elif not uc.get("related"):

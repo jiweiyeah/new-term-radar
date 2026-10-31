@@ -1,5 +1,153 @@
 # Changelog
 
+## Unreleased
+
+### The paid readings go through Monid
+
+The AIsa account's wallet ran empty on 2026-10-31: every data call and every chat call came
+back refused ("insufficient wallet balance"). The Monid workspace wallet was empty too ($0.000146
+left on 2026-10-31), so both doors refuse the paid readings until one of them is topped up; the
+radar names the refusal and goes on with what it can read for free. Monid resells the same
+DataForSEO data at DataForSEO's price and carries the same X, Reddit and YouTube tools, so the
+paid readings now go there first, and AIsa answers when Monid's answer does not come back. One key
+still runs everything; two keys make Monid the one that pays.
+
+- **One adapter for Google's own numbers** (`radar/dfs.py`): a search's first page, the Trends
+  series and the related queries, the monthly searches of a keyword, its difficulty, a site's
+  registration, the words a site ranks for, the pages that link to it. Monid is asked first,
+  AIsa second, and the answer is the same shape either way.
+- **X, Reddit, YouTube and the judge** (`radar/monid.py`): the posts and the searches now go
+  through Monid's `anyapi` tools, and the name judge through Monid's OpenAI-compatible chat
+  proxy (`gpt-4.1-mini`, `gpt-4o-mini`, `gemini-2.5-flash`, `deepseek-chat`, `claude-sonnet-4-6`;
+  `qwen-flash` was AIsa's and Monid does not carry it, so `config.json` names `gpt-4.1-mini`).
+- **An empty wallet no longer takes the key down with it** (`radar/aisa.py`): the wallet belongs
+  to the account, not to the key. A refusal for an empty wallet is named ("the AIsa wallet is
+  empty") and the key stays alive, so a top-up makes it work again without a manual reset.
+  Before, the key was marked dead for that and every later run skipped it.
+- **Cheaper where it counts, dearer where it does not**: the Labs calls are $0.012 a call plus
+  $0.00012 a keyword (AIsa charged $0.09 a call for the volume and $0.012 for the difficulty),
+  the ChatGPT answers about $0.0007 each (was about $0.004), the X posts and searches about
+  $0.002 a call (the list price is $0.0001 a unit), and the domains a site's backlinks come from
+  $0.024 a call plus $0.000036 a row. The Trends calls are the exception: Monid charges $0.011
+  a call, and AIsa charges the same $0.011 for the same task when it is measured (2026-10-31; the
+  $0.0012 in the earlier notes does not hold for it), and the keyword table asks for two a row, plus the country
+  series and the word's age. The table that cost about $0.14 for one name now costs about $0.70,
+  and about $1.05 for five (AIsa: about $0.34); with the example config a month is about $38
+  instead of about $5.
+
+### The model's calls go through an OpenAI-compatible gateway
+
+The model calls — the name judge, the keyword table's phrases, the pains, the sellers' kinds — do not
+go through AIsa any more. They go to an OpenAI-compatible gateway: `OPENAI_BASE_URL` with
+`OPENAI_API_KEY`. The `openai` SDK is used when it is installed, the standard library's urllib when it
+is not — the same protocol, so the package still installs on the standard library alone
+(`radar/llm.py`).
+
+- **AIsa is not a model door any more** (`radar/aisa.py`): its chat endpoint is gone, and with it the
+  second wallet the key ledger kept apart (one scope now, `data`). AIsa answers Google's own numbers
+  and only those. Monid's chat is the second door for the model ($0.002 a call), and both failures are
+  named.
+- **The gateway names its models with the maker in front** ("openai/gpt-5.4-mini"), so the name in
+  `config.json` is looked up in the gateway's own model list, and a model it does not carry falls back
+  to a short chain of cheap ones. The model that answered is named in the report (`model` in the JSON).
+- **The config's models now name what the gateway carries**: `gpt-5.4-mini` for the judge, the pains,
+  the asks and the sellers, `claude-sonnet-5` for the use cases. A name the gateway does not know is
+  still tried first, so an old config keeps working.
+- The two model clients are told apart in the tests: the SDK path and the standard-library path both
+  speak the same protocol, and only a connection that never left is asked again (`radar/llm.py`).
+
+### GoAnyAPI is gone
+
+The four readings GoAnyAPI gave the radar now come from Monid (https://monid.ai/tools) and from the sources
+themselves. The key is `MONID_API_KEY` now; `GOANYAPI_API_KEY` is no longer read.
+
+- **The rating of each site on page one** — Ahrefs through Monid, about $0.0013 a site, kept 30 days (was $0.002
+  through GoAnyAPI). `radar/monid.py` runs the call and waits for its answer: a run on Monid is asynchronous, so
+  every call polls until the run is done.
+- **The traffic of a new seller** — Similarweb through Monid, about $0.0017 a site: the monthly visits, where they
+  come from and the share that comes from AI answers. The domain's registration date no longer comes inside that
+  answer: it is the registry's own RDAP answer now (`radar/rdap.py`), free, and it works for every suffix.
+- **The other domains on a paying site's AdSense account** — the site's own `ads.txt` says its publisher ID,
+  Google's Ads Transparency Center (through Monid, about $0.0048 a site: it is asked under the site's own name and
+  under its own domain, so the brand's family and the near-misses on it are both in) says which domains run ads
+  naming the site, and each of those domains' own `ads.txt` says whether the publisher ID is the same one. A domain
+  that only mentions the name in its ads shares no ID and is dropped, and a site carrying several publisher IDs is
+  read through the one with the most sites behind it. `radar/adsense.py`.
+  Google keeps no list of the domains on a publisher ID, so a media group's whole portfolio can no longer be
+  counted the way it was: the bar for "a network, not a person" is now six of the domains that name the site on
+  one ID (`max_sisters`, 5).
+- **The Chrome Web Store's low-star reviews** — the store's own call, read the way the store's page reads it: the
+  page holds no review text, it says which internal call to make, so one GET says how to ask (the id of the reviews
+  call, the session id, the build id) and one POST per extension and star level brings the reviews back. Free, no
+  key, and the id is read off the page because it rotates (`radar/cws.py`). It was 3 credits a page.
+
+The docs said GoAnyAPI also answered the related queries and the one-country Trends series. Both come from
+DataForSEO through AIsa now (`radar/google.py`), like the rest of Google's own numbers, and the docs say so.
+
+### Fixed on the way
+
+- **The model that judges a name could take the whole table with it** (`radar/usecases.py`): the call that
+  proposes the keywords was made with no guard (the screen below it had one), so a refused model call ended
+  the keyword table with a traceback: the day's names, their terms and their sizes, all gone. The name now
+  goes on with the related queries alone, and the failure is named under the table.
+- **A week of paid-for Reddit posts could be lost to one refused lookup** (`radar/asks.py`): the call for the
+  searches of a keyword was not guarded. It is now: the posts are kept, the jobs are listed without their
+  volume, and the error is named.
+- **An answer in an unexpected shape could take the table down** (`radar/usecases.py`, `radar/dfs.py`): a row
+  without a keyword, a month without a year, a Trends point with a broken date. Such a row is left out now,
+  not raised.
+- **The second door's Trends answers were not read** (`radar/google.py`, `radar/markets.py`): the item type was
+  matched exactly ("google_trends_graph"), and AIsa answers "dataforseo_trends_graph": the country series, the
+  related queries and the top region came back empty without a word. The match is loose now, the way the
+  review's already was.
+- **An empty wallet spelled differently marked the key dead** (`radar/aisa.py`): the wallet words were matched
+  with their case, so "Insufficient Wallet Balance" did not match, and a batch where only some of the calls
+  failed marked the key dead and bought the whole batch again on the next key. Both are fixed: the words are
+  matched in lower case, and a key that worked for some calls of a batch is not a refused key.
+- **The same difficulty was bought twice a run** (`radar/usecases.py`, `radar/competition.py`): the markets
+  reading buys the difficulty for the table's own market, and the page-one check bought it again. The second
+  reading reuses the first: $0.012 a run back.
+- **A run whose answer never came was bought a second time** (`radar/monid.py`, `radar/dfs.py`): a Monid run
+  that was created and never answered may already have been billed, so the second door no longer buys the same
+  reading again. A run is also given up on by a real deadline now (180 s), not by ninety polls of sixty.
+- **The vendor's answer is no longer echoed into the report** (`radar/monid.py`): the whole answer could travel
+  into the report and out by mail, request and all. Only the reason is kept now.
+- **A line that broke before the request was delivered is asked again** (`radar/net.py`): about one call
+  in six to api.monid.ai ends the TLS handshake early ("UNEXPECTED_EOF_WHILE_READING"), and the reading was
+  lost: the run had asked for it, and the table came out with a hole in it. A handshake that broke sends
+  nothing, so the call is asked again (three times, with a pause). A request that was delivered and whose
+  answer was cut is not asked again: it may already have been billed. Every HTTP call in the radar goes
+  through it now, the paid readings and the free ones alike.
+- **A search that failed was read as an empty search** (`radar/google.py`): a DataForSEO task that its own server
+  failed on (40101, seen on about a quarter of the calls) came back as no results at all, and the radar carried on
+  as if the page had nothing on it. The search is asked again now, on the other search (the live one and the
+  cached one fail apart), and a failure that is not a server's fault is raised, so the report names it.
+- **The pains signal's two searches no longer use Google's `site:` operator** (`radar/pains.py`): DataForSEO answers
+  it with the real address hidden behind Google's own redirect (and sometimes with nothing from the site at all),
+  so the Chrome Web Store and YouTube are asked for by name and picked out of the answer. The extensions a keyword
+  brings are found again. The extensions themselves now come from the store's own search (one GET of
+  `chromewebstore.google.com/search/<keyword>`, free): it knows which extensions carry the keyword, and the
+  search engine's index of the store is thin and slow to answer.
+- **The Discord servers beside a name are counted from Disboard's own search** (`radar/sidelights.py`): the count
+  came from a `site:disboard.org` search, which DataForSEO answers with the address hidden behind Google's own
+  redirect, so the count was always zero. Disboard's search is a form: its page is asked for the token the form
+  needs, the name is posted to it, and the servers in the answer are counted. Free.
+- **A site's name is its name** (`radar/domains.py`): "vogue.com.tw" was called "com" and "ai-tools.co.uk" its
+  whole address. The name is now the part before the suffix, and "www." and the usual subdomains are left out.
+- **A model that is not paid for no longer takes the key down with it** (`radar/aisa.py`): AIsa refuses a model
+  that needs a top-up with the same 402 as an empty wallet, and the radar marked the whole key dead for chat calls
+  on that, so every model-driven signal failed after one such call. The key now stays alive, and the refusal is
+  reported as it is: "model gpt-4.1-mini requires a paid balance".
+- **A reading that cannot be bought no longer takes the table down with it** (`radar/usecases.py`): the search
+  volumes and the Trends curves were read outside any guard, so an empty wallet (or a refused call) ended the
+  keyword table with a traceback instead of a table. The failure is named under the table now ("Some readings
+  failed, so the table holds less: ..."), the rows read "no data" and nothing is prioritized on a number the radar
+  does not have.
+- **The related queries and the one-country series need a key to be bought** (`radar/usecases.py`, `radar/dfs.py`):
+  they were off when there was no key (they were GoAnyAPI's, and GoAnyAPI had its own key). Now they follow the
+  same rule as the other paid readings: with no Monid key and no AIsa key they are not tried at all, and the table
+  says so instead of listing a failure for every name.
+
 ## 0.6.1 (2026-10-28)
 
 - Nothing goes out without the user's yes. The three skills and the MCP server's instructions now say the radar
