@@ -79,6 +79,30 @@ def test_a_crowded_rising_term_is_watched_not_prioritized(cfg, tmp_path, monkeyp
     assert "**crowded term**: no easy slot, even the weakest, canva.com, is rated 94 (#1)" in text
 
 
+def test_the_ratings_that_did_not_come_back_are_named(cfg, tmp_path, monkeypatch):
+    # A key is there, but the ratings did not come back: the report says so, and it does not
+    # blame a key that is present.
+    cfg["competition"]["max_rows"] = 8
+    monkeypatch.setenv("MONID_API_KEY", "k")
+    pages = {"term": _serp_items([("a.com", "https://a.com/x", "A")])}
+    monkeypatch.setattr(dfs, "result", _serp_stub(pages))
+    monkeypatch.setattr(dfs, "rows", _kd_stub({"term": 40}))
+
+    def empty_wallet(provider, endpoint, body=None, query=None):
+        raise monid.MonidError("BLOCKED: Not enough wallet balance: top up the workspace wallet")
+    monkeypatch.setattr(competition.monid, "data", empty_wallet)
+    rows = [{"phrase": "term", "decision": "prioritize"}]
+    cost, errors = competition.assess(rows, cfg, tmp_path)
+    assert any("Not enough wallet balance" in e for e in errors) and errors[0].startswith("ratings: ")
+    assert rows[0]["competition"]["weak"] is None
+    uc = {"names": ["x"], "rows": [dict(rows[0], kind="generic", names=["x"], brand=False, new=False, now="rising",
+                                       peak_day="2026-10-10", evidence="")],
+          "proposed": 1, "relevant": 1, "kept": 1, "benchmark": "gpts", "volume_month": "2026-08", "related": True,
+          "competition_errors": errors}
+    text = "\n".join(report.keyword_table(cfg, uc))
+    assert "The site ratings did not come back" in text and "No MONID_API_KEY" not in text
+
+
 def test_a_new_term_reads_one_step_easier_on_page_one(cfg, tmp_path, monkeypatch):
     assert competition.verdict(0, 55, new=True) == "mixed" and competition.verdict(1, 30, new=True) == "open"
     assert competition.verdict(3, None, new=True) == "open" and competition.verdict(None, None, new=True) == "mixed"

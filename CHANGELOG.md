@@ -108,6 +108,12 @@ DataForSEO through AIsa now (`radar/google.py`), like the rest of Google's own n
 - **The same difficulty was bought twice a run** (`radar/usecases.py`, `radar/competition.py`): the markets
   reading buys the difficulty for the table's own market, and the page-one check bought it again. The second
   reading reuses the first: $0.012 a run back.
+- **A missing rating blamed a key that was there** (`radar/competition.py`, `radar/report.py`): when no site on
+  page one came back with a rating, the report said "No MONID_API_KEY" — but a key that is present and a wallet
+  that is empty look the same from there, and the truth was the second: the ratings were refused for an empty
+  wallet and the report said nothing about it. The ratings now name what went wrong ("ratings: Not enough wallet
+  balance: ..."), one line per distinct reason, and the report says that the ratings did not come back instead of
+  blaming a key that is there.
 - **A run whose answer never came was bought a second time** (`radar/monid.py`, `radar/dfs.py`): a Monid run
   that was created and never answered may already have been billed, so the second door no longer buys the same
   reading again. A run is also given up on by a real deadline now (180 s), not by ninety polls of sixty.

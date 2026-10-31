@@ -86,7 +86,7 @@ def test_the_difficulty_already_read_is_not_bought_again(monkeypatch, cfg, tmp_p
     monkeypatch.setattr(competition, "difficulty", lambda keywords, location, language="en": (
         called.append(keywords) or ({}, 0)))
     monkeypatch.setattr(competition, "page_one", lambda phrase, loc: ({"results": [], "ads": [], "features": {}}, 100))
-    monkeypatch.setattr(competition, "ratings", lambda domains, state: ({}, 0))
+    monkeypatch.setattr(competition, "ratings", lambda domains, state: ({}, 0, []))
     rows = [{"phrase": "ai image detector", "decision": "watch"}]
     cost, errors = competition.assess(rows, cfg, tmp_path, {"ai image detector": 37})
     assert not called                                   # the markets reading bought it already
@@ -99,7 +99,7 @@ def test_the_difficulty_of_a_row_nobody_read_is_bought(monkeypatch, cfg, tmp_pat
     monkeypatch.setattr(competition, "difficulty", lambda keywords, location, language="en": (
         called.append(keywords) or ({"ai image detector": 21}, 1200)))
     monkeypatch.setattr(competition, "page_one", lambda phrase, loc: ({"results": [], "ads": [], "features": {}}, 100))
-    monkeypatch.setattr(competition, "ratings", lambda domains, state: ({}, 0))
+    monkeypatch.setattr(competition, "ratings", lambda domains, state: ({}, 0, []))
     rows = [{"phrase": "ai image detector", "decision": "watch"}]
     competition.assess(rows, cfg, tmp_path, {})
     assert called == [["ai image detector"]] and rows[0]["competition"]["kd"] == 21

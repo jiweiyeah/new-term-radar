@@ -100,28 +100,45 @@ def difficulty(keywords: list[str], location: int, language: str = "en") -> tupl
     return {r["keyword"]: _kd(r) for r in rows if r.get("keyword")}, cost
 
 
-def ratings(domains: list[str], state: Path) -> tuple[dict[str, int | None], int]:
-    """Domain rating per site from Ahrefs (through Monid), kept DR_DAYS days in state/ratings.json.gz."""
+def _first_of_each(errors: list[str]) -> list[str]:
+    """One error per distinct message: ten domains with the same empty wallet say it once."""
+    seen: dict[str, str] = {}
+    for e in errors:
+        seen.setdefault(e.split(": ", 1)[1] if ": " in e else e, e)
+    return list(seen.values())[:3]
+
+
+def ratings(domains: list[str], state: Path) -> tuple[dict[str, int | None], int, list[str]]:
+    """Domain rating per site from Ahrefs (through Monid), kept DR_DAYS days in state/ratings.json.gz.
+
+    The third value is what went wrong, named: an empty wallet, a tool that is not there, a
+    domain the provider does not know. A run that gets no rating at all says so instead of
+    blaming the missing key.
+    """
     if not monid.key():
-        return {}, 0
+        return {}, 0, []
     path = state / "ratings.json.gz"
     held = snap.load(path) or {}
     today = date.today()
     fresh = {d: v for d, v in held.items() if (today - date.fromisoformat(v["day"])).days < DR_DAYS}
+    errors: list[str] = []
     def one(d: str):
         try:
-            return d, *monid.data("ahrefs", "/site-explorer/domain-rating",
-                                  query={"target": d, "date": today.isoformat()})
-        except monid.MonidError:
-            return d, None, 0
+            data, spent = monid.data("ahrefs", "/site-explorer/domain-rating",
+                                     query={"target": d, "date": today.isoformat()})
+            return d, data, spent, ""
+        except monid.MonidError as exc:
+            return d, None, 0, str(exc)
     cost = 0
     with ThreadPoolExecutor(WORKERS) as pool:
-        for d, data, spent in pool.map(one, sorted(set(domains) - set(fresh))):
+        for d, data, spent, error in pool.map(one, sorted(set(domains) - set(fresh))):
             cost += spent
-            if data is not None and data.get("domain_rating") is not None:
+            if error:
+                errors.append(f"{d}: {error}")
+            elif data is not None and data.get("domain_rating") is not None:
                 fresh[d] = {"dr": data["domain_rating"], "day": today.isoformat()}
     snap.save(path, fresh)
-    return {d: v["dr"] for d, v in fresh.items()}, cost
+    return {d: v["dr"] for d, v in fresh.items()}, cost, errors
 
 
 def supply(rows: list[dict], pages: dict[str, dict]) -> tuple[int, list[str]]:
@@ -189,8 +206,9 @@ def assess(rows: list[dict], cfg: dict, state: Path, known: dict[str, int] | Non
             kds.update(got)
         except dfs.DfsError as exc:
             errors.append(f"difficulty: {exc}")
-    dr, spent = ratings([x["domain"] for p in pages.values() for x in p["results"]], state)
+    dr, spent, rating_errors = ratings([x["domain"] for p in pages.values() for x in p["results"]], state)
     cost += spent
+    errors += [f"ratings: {e}" for e in _first_of_each(rating_errors)]
     for r in picked:
         p = pages.get(r["phrase"])
         if not p:

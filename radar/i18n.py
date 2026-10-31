@@ -239,6 +239,8 @@ T = {
     "pc_err": ("Page-one check failed for: {names}.", "首页竞争查询失败:{names}。"),
     "pc_no_dr": ("No MONID_API_KEY: page one is judged by keyword difficulty alone, without the sites' ratings.",
                  "没有 MONID_API_KEY:首页竞争只看关键词难度,没有各站评分。"),
+    "pc_no_dr_failed": ("The site ratings did not come back: page one is judged by keyword difficulty alone, without the sites' ratings.",
+                        "站点评分没有回来:首页竞争只看关键词难度,没有各站评分。"),
     "pk_tool": ("tool", "工具"), "pk_list": ("list", "榜单"), "pk_article": ("article", "文章"), "pk_video": ("video", "视频"), "pk_forum": ("forum", "论坛"),
     "uc_type_name": ("name", "名字"), "uc_type_generic": ("generic", "通用词"),
     "uc_yes": ("yes", "是"), "uc_no": ("no", "否"),

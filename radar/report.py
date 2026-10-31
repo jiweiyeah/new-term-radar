@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 
-from . import asks, competition, opportunity, sellers, config, judge, usecases, yours
+from . import asks, competition, opportunity, sellers, config, judge, monid, usecases, yours
 from .i18n import t
 
 SHOWN = 20
@@ -607,7 +607,9 @@ def _page_one_lines(cfg: dict, uc: dict) -> list[str]:
         return []
     lines = [t("pc_note", dr=cfg["competition"]["weak_dr"])]
     if rows and all(r["competition"].get("weak") is None for r in rows):
-        lines.append(t("pc_no_dr"))
+        # No rating at all. With no Monid key that is the reason; with a key it is a reading
+        # that did not come back, and the error line below names it.
+        lines.append(t("pc_no_dr_failed") if monid.key() else t("pc_no_dr"))
     weakest = [r for r in rows if r["competition"].get("weakest")]
     if weakest:
         lines += ["", t("pc_weakest_h")]
